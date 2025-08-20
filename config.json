@@ -1,0 +1,43 @@
+{
+    "initial_transl": [
+        0.2927,
+        0.6145,
+        1.5069
+    ],
+    "initial_global_orient": [
+        3.14,
+        0.0,
+        0.0
+    ],
+    "shoulder_r_start": [
+        0.0,
+        0.0,
+        60.0
+    ],
+    "shoulder_l_start": [
+        0.0,
+        0.0,
+        -60.0
+    ],
+    "pos": {
+        "y_offset": 1.4,
+        "lr": 0.01,
+        "it": 400
+    },
+    "rot": {
+        "lr": 0.01,
+        "it": 250
+    },
+    "pos-rot": {
+        "lr": 0.0001,
+        "it": 1
+    },
+    "body_pose": {
+        "lr": 0.01,
+        "it": 250
+    },
+    "shape": {
+        "lr": 0.01,
+        "it": 250
+    }
+}
