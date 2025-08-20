@@ -13,7 +13,7 @@
 using namespace torch::indexing;
 
 class SMPLOptimizer {
- public:
+public:
   SMPLOptimizer(smplx::SMPL &smpl_model, const torch::Tensor &target_vertices,
                 const torch::Tensor &faces, torch::Device device)
       : smpl(smpl_model), faces_(faces), device_(device), chamfer_() {
@@ -92,7 +92,7 @@ class SMPLOptimizer {
     vis_.Run();
   }
 
- private:
+private:
   void update_mesh(const torch::Tensor &vertices_pred) {
     auto verts = vertices_pred.squeeze(0).to(torch::kCPU).contiguous();
 
@@ -120,8 +120,10 @@ class SMPLOptimizer {
 };
 
 int main(int argc, char *argv[]) {
-  if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+  if (argc < 4) {
+    std::cerr << "Usage: " << argv[0]
+              << " <model_path> <json_config_path> <point_cloud_path>"
+              << std::endl;
     return 1;
   }
 
@@ -130,8 +132,19 @@ int main(int argc, char *argv[]) {
     std::cerr << "Model path does not exist: " << path << std::endl;
     return 1;
   }
+  std::string config_path = argv[2];
+  if (!std::filesystem::exists(config_path)) {
+    std::cerr << "Config path does not exist: " << config_path << std::endl;
+    return 1;
+  }
+  std::string point_cloud_path = argv[3];
+  if (!std::filesystem::exists(point_cloud_path)) {
+    std::cerr << "Point cloud path does not exist: " << point_cloud_path
+              << std::endl;
+    return 1;
+  }
   nlohmann::json config;
-  std::ifstream file("config.json");
+  std::ifstream file(config_path);
   file >> config;
   std::cout << "Using config: " << config.dump(4) << std::endl;
 
@@ -146,7 +159,11 @@ int main(int argc, char *argv[]) {
 
   // Load target point cloud
   auto cloud_ptr =
-      open3d::io::CreatePointCloudFromFile("target.ply", "auto", true);
+      open3d::io::CreatePointCloudFromFile(point_cloud_path, "auto", true);
+  if (cloud_ptr->IsEmpty()) {
+    std::cerr << "Failed to load point cloud from target.ply" << std::endl;
+    return 1;
+  }
 
   // downsample the point cloud
   cloud_ptr = cloud_ptr->VoxelDownSample(0.01);

@@ -3,7 +3,7 @@ project(fitting_smpl)
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 
 # In the top-level CMakeLists.txt of the consumer project
-list(APPEND CMAKE_PREFIX_PATH "/home/hydran00/smpl-cpp/build")
+list(APPEND CMAKE_PREFIX_PATH "/home/nardi/torchure_smplx/build")
 
 find_package(torchure_smplx REQUIRED)
 find_package(Torch REQUIRED)

@@ -1,4 +1,5 @@
 *.ply
+*.obj
 build/
 .vscode/
 preprocess.py
