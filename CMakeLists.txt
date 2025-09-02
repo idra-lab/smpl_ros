@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 
 # Torchure SMPLX
-list(APPEND CMAKE_PREFIX_PATH "/home/nardi/torchure_smplx/build")
 find_package(torchure_smplx REQUIRED)
 
 # LibTorch
@@ -19,21 +18,17 @@ find_package(rclcpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-# PCL
-find_package(PCL REQUIRED COMPONENTS io filters)
-
 
 # Executable
 add_executable(fitting_smpl src/fitting_smpl_ros.cpp)
 
 target_include_directories(fitting_smpl PRIVATE
-  ${PCL_INCLUDE_DIRS} ${Open3D_INCLUDE_DIRS} include
+  ${Open3D_INCLUDE_DIRS} include
 )
 
 target_link_libraries(fitting_smpl
   torchure_smplx::smplx
   ${TORCH_LIBRARIES}
-  ${PCL_LIBRARIES}
   ${Open3D_LIBRARIES}
 )
 

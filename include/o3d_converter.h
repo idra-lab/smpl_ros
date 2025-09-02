@@ -11,9 +11,9 @@ std::tuple<torch::Tensor, torch::Tensor> open3d_mesh_to_tensor(
     const open3d::geometry::TriangleMesh &mesh) {
   // Convert Open3D mesh to PyTorch tensors
   torch::Tensor vertices =
-      torch::empty({mesh.vertices_.size(), 3}, torch::kFloat64);
+      torch::empty({static_cast<int64_t>(mesh.vertices_.size()), 3}, torch::kFloat64);
   torch::Tensor faces =
-      torch::empty({mesh.triangles_.size(), 3}, torch::kInt64);
+      torch::empty({static_cast<int64_t>(mesh.triangles_.size()), 3}, torch::kInt64);
 
   for (size_t i = 0; i < mesh.vertices_.size(); ++i) {
     const auto &v = mesh.vertices_[i];
@@ -31,9 +31,9 @@ std::tuple<torch::Tensor, torch::Tensor> open3d_pointcloud_to_tensor(
     const open3d::geometry::PointCloud &cloud) {
   // Convert Open3D point cloud with colors to PyTorch tensors
   torch::Tensor points =
-      torch::empty({cloud.points_.size(), 3}, torch::kFloat64);
+      torch::empty({static_cast<int64_t>(cloud.points_.size()), 3}, torch::kFloat64);
   torch::Tensor colors =
-      torch::empty({cloud.colors_.size(), 3}, torch::kFloat64);
+      torch::empty({static_cast<int64_t>(cloud.colors_.size()), 3}, torch::kFloat64);
 
   for (size_t i = 0; i < cloud.points_.size(); ++i) {
     const auto &p = cloud.points_[i];
