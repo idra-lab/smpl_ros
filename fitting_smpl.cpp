@@ -205,12 +205,19 @@ int main(int argc, char *argv[]) {
     std::cout << "Loaded Transl: " << transl << std::endl;
 
     // Global orientation
-    global_orient.index_put_(
-        {0, 0}, static_cast<double>(config["initial_global_orient"][0]));
-    global_orient.index_put_(
-        {0, 1}, static_cast<double>(config["initial_global_orient"][1]));
-    global_orient.index_put_(
-        {0, 2}, static_cast<double>(config["initial_global_orient"][2]));
+    double r = static_cast<double>(config["initial_global_orient_rpy"][0]);
+    double p = static_cast<double>(config["initial_global_orient_rpy"][1]);
+    double y = static_cast<double>(config["initial_global_orient_rpy"][2]);
+    // Convert RPY to rodrigues
+    Eigen::Matrix3d R;
+    R = Eigen::AngleAxisd(r, Eigen::Vector3d::UnitX()) *
+        Eigen::AngleAxisd(p, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(y, Eigen::Vector3d::UnitZ());
+    Eigen::AngleAxisd aa(R);
+    Eigen::Vector3d rod = aa.axis() * aa.angle();
+    global_orient.index_put_({0, 0}, rod[0]);
+    global_orient.index_put_({0, 1}, rod[1]);
+    global_orient.index_put_({0, 2}, rod[2]);
     std::cout << "Loaded Global orient: " << global_orient << std::endl;
 
     double rot_x_r = deg_to_rad(config["shoulder_r_start"][0]);

@@ -1,13 +1,13 @@
 {
     "initial_transl": [
-        -0.0647,
-        0.2500,
-        1.6690
+        0.00,
+        0.0,
+        0.0
     ],
-    "initial_global_orient": [
-        0.0,
-        0.0,
-        3.14
+    "initial_global_orient_rpy": [
+        1.57,
+        -1.57,
+        0.0
     ],
     "shoulder_r_start": [
         0.0,
@@ -22,11 +22,11 @@
     "pos": {
         "y_offset": 1.4,
         "lr": 0.01,
-        "it": 70
+        "it": 600
     },
     "rot": {
         "lr": 0.01,
-        "it": 250
+        "it": 500
     },
     "pos-rot": {
         "lr": 0.0001,

@@ -9,6 +9,7 @@
 #include "o3d_converter.h"
 #include "smpl_rviz.hpp"
 #include "smplx.hpp"
+#include "tqdm/tqdm.hpp"
 
 #define VISUALIZATION true
 #define VISUALIZATION_UPDATE_EVERY 1
@@ -59,7 +60,7 @@ public:
       throw std::runtime_error("Failed to load point cloud");
     }
 
-    cloud_ptr = cloud_ptr->VoxelDownSample(0.01);
+    cloud_ptr = cloud_ptr->VoxelDownSample(0.005);
     auto [vertices, colors] = open3d_pointcloud_to_tensor(*cloud_ptr);
 
     // Publish point cloud via RViz helper
@@ -95,12 +96,21 @@ public:
                          static_cast<double>(config_["initial_transl"][1]),
                          static_cast<double>(config_["initial_transl"][2])}));
 
-      global_orient_.index_put_(
-          {0, Slice()},
-          torch::tensor(
-              {static_cast<double>(config_["initial_global_orient"][0]),
-               static_cast<double>(config_["initial_global_orient"][1]),
-               static_cast<double>(config_["initial_global_orient"][2])}));
+      // Global orientation
+      double r = static_cast<double>(config_["initial_global_orient_rpy"][0]);
+      double p = static_cast<double>(config_["initial_global_orient_rpy"][1]);
+      double y = static_cast<double>(config_["initial_global_orient_rpy"][2]);
+      // Convert RPY to rodrigues
+      Eigen::Matrix3d R;
+      R = Eigen::AngleAxisd(r, Eigen::Vector3d::UnitX()) *
+          Eigen::AngleAxisd(p, Eigen::Vector3d::UnitY()) *
+          Eigen::AngleAxisd(y, Eigen::Vector3d::UnitZ());
+      Eigen::AngleAxisd aa(R);
+      Eigen::Vector3d rod = aa.axis() * aa.angle();
+      global_orient_.index_put_({0, 0}, rod[0]);
+      global_orient_.index_put_({0, 1}, rod[1]);
+      global_orient_.index_put_({0, 2}, rod[2]);
+
       double rot_x_r = deg_to_rad(config_["shoulder_r_start"][0]);
       double rot_y_r = deg_to_rad(config_["shoulder_r_start"][1]);
       double rot_z_r = deg_to_rad(config_["shoulder_r_start"][2]);
@@ -144,15 +154,27 @@ public:
     // Shape optimization
     params = {betas_};
     optimize(params, config_["shape"]["lr"], config_["shape"]["it"]);
+
+    RCLCPP_INFO(this->get_logger(), "Optimization complete.");
+    rclcpp::shutdown();
+    exit(0);
   }
 
 private:
   void optimize(const std::vector<torch::Tensor> &params_to_optimize,
-                double learning_rate, int steps) {
+                double learning_rate, int steps, double eps_thresh = 1e-6) {
     torch::optim::Adam optimizer(params_to_optimize,
                                  torch::optim::AdamOptions(learning_rate));
+    double loss_old = 0.0;
+    auto bar = tqdm::tqdm(tqdm::range(steps));
+    bar.set_prefix("Iterating over A: ");
+    for (int step : bar) {
 
-    for (int i = 0; i < steps && rclcpp::ok(); ++i) {
+      if (!rclcpp::ok()) {
+        RCLCPP_INFO(this->get_logger(),
+                    "ROS shutdown detected, stopping optimization");
+        break;
+      }
       optimizer.zero_grad();
 
       auto output = smpl_->forward(
@@ -163,20 +185,22 @@ private:
       auto vertices_pred = output.vertices.value();
       auto loss = chamfer_.forward(vertices_pred.to(torch::kFloat64),
                                    vertices_target_.to(torch::kFloat64), true);
-
-      if (betas_.defined()) {
-        loss += 0.01 * betas_.pow(2).sum();
-      }
-
+      // if (betas_.defined()) {
+      //   loss += 0.001 * betas_.pow(2).sum();
+      // }
+      bar << "loss = " << loss.item<float>();
       loss.backward();
       optimizer.step();
-
-      if (i % 10 == 0 || i == steps - 1) {
-        RCLCPP_INFO(this->get_logger(), "Step %d, Loss: %f", i,
-                    loss.item<float>());
+      // Check for convergence
+      if (std::abs(loss.item<double>() - loss_old) < eps_thresh) {
+        RCLCPP_INFO(this->get_logger(),
+                    "Loss converged, stopping optimization at step %d", step);
+        break;
       }
+      loss_old = loss.item<double>();
+      // Update visualization
       if (VISUALIZATION &&
-          (i % VISUALIZATION_UPDATE_EVERY == 0 || i == steps - 1)) {
+          (step % VISUALIZATION_UPDATE_EVERY == 0 || step == steps - 1)) {
         vis_->update_mesh(vertices_pred, faces_);
       }
     }
