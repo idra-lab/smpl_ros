@@ -5,9 +5,9 @@
         1.6690
     ],
     "initial_global_orient": [
-        3.14,
         0.0,
-        0.0
+        0.0,
+        3.14
     ],
     "shoulder_r_start": [
         0.0,
@@ -30,7 +30,7 @@
     },
     "pos-rot": {
         "lr": 0.0001,
-        "it": 1
+        "it": 200
     },
     "body_pose": {
         "lr": 0.01,
