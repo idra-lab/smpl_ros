@@ -43,5 +43,8 @@ ament_target_dependencies(fitting_smpl
 install(TARGETS fitting_smpl
   DESTINATION lib/${PROJECT_NAME}
 )
+install(DIRECTORY launch rviz
+  DESTINATION share/${PROJECT_NAME}
+)
 
 ament_package()
