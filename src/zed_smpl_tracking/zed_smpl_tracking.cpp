@@ -11,6 +11,7 @@
 #include <Eigen/Dense>
 #include <rclcpp/rclcpp.hpp>
 
+#include "tf2_ros/static_transform_broadcaster.h"
 #include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/zed_utils.hpp"
@@ -25,8 +26,11 @@ int main(int argc, char **argv) {
                                        "/home/nardi/smpl_ros/zed_calib3.json");
   node->declare_parameter<std::string>("yolo_model_path",
                                        "/home/nardi/smpl_ros/yolov8x-seg.onnx");
-  node->declare_parameter<int>("max_width", 1920);
-  node->declare_parameter<int>("max_height", 1080);
+  auto tf_static_broadcaster_ =
+      std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
+
+  node->declare_parameter<int>("max_width", 1280);
+  node->declare_parameter<int>("max_height", 720);
   node->declare_parameter<bool>("publish_point_cloud", true);
 
   std::string calib_file = node->get_parameter("calibration_file").as_string();
@@ -54,16 +58,27 @@ int main(int argc, char **argv) {
 
   // ------------------ ZED + SMPL Setup ------------------
   constexpr sl::COORDINATE_SYSTEM COORDINATE_SYSTEM =
-      sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
+      sl::COORDINATE_SYSTEM::IMAGE;
   constexpr sl::UNIT UNIT = sl::UNIT::METER;
   Eigen::Matrix4d T_SMPL_TO_ROS = smpl_to_ros_transform();
 
   auto configurations =
       sl::readFusionConfigurationFile(calib_file, COORDINATE_SYSTEM, UNIT);
+
   if (configurations.empty()) {
     RCLCPP_ERROR(node->get_logger(), "No ZED configurations found.");
     return EXIT_FAILURE;
   }
+  std::map<int, Eigen::Matrix4d> T_cams_extrinsics;
+  for (int i = 0; i < configurations.size(); i++) {
+    // print camera transform
+    auto T = slTransformToEigen(configurations[i].pose);
+    T_cams_extrinsics[configurations[i].serial_number] = T;
+    std::cout << "Camera SN" << configurations[i].serial_number
+              << " extrinsics:\n"
+              << T << std::endl;
+  }
+  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics);
 
   RCLCPP_INFO(node->get_logger(), "Starting ZED SMPL tracking...");
   Trigger trigger;
@@ -136,10 +151,9 @@ int main(int argc, char **argv) {
     std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>> pcs(
         clients.size());
     if (publish_point_cloud) {
-      for (int i = 0; i < clients.size(); ++i) {
-        Eigen::Matrix4d Ts =
-            Eigen::Matrix4d::Identity(); // per-camera transform
-        pcs[i] = clients[i].getFilteredPointCloud(Ts, yolo_net, yolov8Seg);
+      for (int i = 0; i < cameras.size(); i++) {
+        pcs[i] = clients[i].getFilteredPointCloud(
+            T_cams_extrinsics[clients[i].serial], yolo_net, yolov8Seg);
       }
       auto merged_cloud = mergePointClouds(pcs);
       publishMergedPointCloud(cloud_pub, merged_cloud, "map");

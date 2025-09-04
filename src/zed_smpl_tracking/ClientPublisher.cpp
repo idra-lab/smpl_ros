@@ -16,6 +16,8 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
   init_parameters.sdk_gpu_id = sdk_gpu_id;
   init_parameters.coordinate_system =
       sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
+  init_parameters.camera_resolution = sl::RESOLUTION::HD720;
+//   init_parameters.reference_frame = sl::REFERENCE_FRAME::WORLD;
   auto state = zed.open(init_parameters);
   if (state != sl::ERROR_CODE::SUCCESS) {
     std::cout << "Error: " << state << std::endl;

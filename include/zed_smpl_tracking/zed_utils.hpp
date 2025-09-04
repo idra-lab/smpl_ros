@@ -1,12 +1,14 @@
 #pragma once
 #include <Eigen/Dense>
 #include <atomic>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <map>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <sl/Camera.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <thread>
 #include <vector>
 
@@ -195,6 +197,54 @@ mergePointClouds(
   return merged;
 }
 
+Eigen::Matrix4d slTransformToEigen(const sl::Transform &T) {
+  Eigen::Matrix4d mat = Eigen::Matrix4d::Identity();
+
+  // Rotation part
+  sl::Matrix3f r = T.getRotationMatrix(); // returns sl::Matrix3f
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      mat(i, j) = static_cast<double>(r(i, j));
+
+  // Translation part
+  sl::Translation t = T.getTranslation();
+  mat(0, 3) = static_cast<double>(t.x);
+  mat(1, 3) = static_cast<double>(t.y);
+  mat(2, 3) = static_cast<double>(t.z);
+
+  return mat;
+}
+static void broadcastStaticCameras(
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster,
+    const std::map<int, Eigen::Matrix4d> &T_cams_extrinsics,
+    const std::string &parent_frame = "map") {
+
+  for (const auto &pair : T_cams_extrinsics) {
+    int i = pair.first;
+    const Eigen::Matrix4d &T = pair.second;
+    std::string sn = std::to_string(i);
+    // create transform message
+    geometry_msgs::msg::TransformStamped t;
+    t.header.stamp = rclcpp::Clock().now();
+    t.header.frame_id = parent_frame;
+    t.child_frame_id = "cam_" + std::to_string(i) + sn;
+
+    // translation
+    t.transform.translation.x = T(0, 3);
+    t.transform.translation.y = T(1, 3);
+    t.transform.translation.z = T(2, 3);
+
+    // rotation
+    Eigen::Quaterniond q(T.block<3, 3>(0, 0));
+    t.transform.rotation.x = q.x();
+    t.transform.rotation.y = q.y();
+    t.transform.rotation.z = q.z();
+    t.transform.rotation.w = q.w();
+
+    // send immediately
+    tf_broadcaster->sendTransform(t);
+  }
+}
 void publishMergedPointCloud(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
     const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
