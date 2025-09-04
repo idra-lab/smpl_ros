@@ -1,4 +1,4 @@
-#include "ClientPublisher.hpp"
+#include "zed_smpl_tracking/ClientPublisher.hpp"
 
 ClientPublisher::ClientPublisher() { }
 
@@ -17,7 +17,7 @@ bool ClientPublisher::open(sl::InputType input, Trigger* ref, int sdk_gpu_id) {
     init_parameters.coordinate_units = sl::UNIT::METER;
     init_parameters.depth_stabilization = 30;
     init_parameters.sdk_gpu_id = sdk_gpu_id;
-    init_parameters.coordinate_system = sl::COORDINATE_SYSTEM::LEFT_HANDED_Y_UP;
+    init_parameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
     auto state = zed.open(init_parameters);
     if (state != sl::ERROR_CODE::SUCCESS)
     {

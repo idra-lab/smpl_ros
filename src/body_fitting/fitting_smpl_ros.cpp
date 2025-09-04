@@ -7,7 +7,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "chamfer.h"
-#include "smpl_rviz.hpp"
+#include "smpl_ros_viewer/smpl_rviz.hpp"
 #include "smplx.hpp"
 #include "utils/json.hpp"
 #include "utils/o3d_converter.h"
@@ -229,7 +229,8 @@ private:
       // Update visualization
       if (VISUALIZATION &&
           (step % VISUALIZATION_UPDATE_EVERY == 0 || step == steps - 1)) {
-        vis_->update_mesh(vertices_pred, faces_);
+        vis_->add_mesh(vertices_pred, faces_);
+        vis_->update_visualization();
       }
     }
 

@@ -5,10 +5,8 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "smpl_msgs/msg/smpl.hpp"
-#include "smpl_rviz.hpp"
+#include "smpl_ros_viewer/smpl_rviz.hpp"
 #include "smplx.hpp"
-
-#define VISUALIZATION true
 
 using namespace torch::indexing;
 
@@ -32,6 +30,9 @@ public:
       RCLCPP_FATAL(this->get_logger(), "SMPL model path not provided!");
       throw std::runtime_error("SMPL model path missing");
     }
+    SMPL_TO_ROS_ =
+        torch::tensor({{0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}},
+                      torch::TensorOptions().dtype(torch::kFloat64).device(device_));
   }
 
   void initialize() {
@@ -60,7 +61,7 @@ public:
 
 private:
   void smplCallback(const smpl_msgs::msg::Smpl::SharedPtr msg) {
-    RCLCPP_INFO(this->get_logger(), "Received SMPL params");
+    // RCLCPP_INFO(this->get_logger(), "Received SMPL params");
     // Copy body_pose
     for (int i = 0; i < 69; ++i) {
       body_pose_.index_put_({0, i}, static_cast<double>(msg->body_pose[i]));
@@ -78,15 +79,39 @@ private:
     }
 
     // Forward SMPL to get vertices
-    auto output = smpl_->forward(
-        smplx::body_pose(body_pose_), smplx::global_orient(global_orient_),
-        smplx::betas(betas_),
-        smplx::transl(transl_), smplx::return_verts(true));
+    auto output = smpl_->forward(smplx::body_pose(body_pose_),
+                                 smplx::global_orient(global_orient_),
+                                 smplx::betas(betas_), smplx::transl(transl_),
+                                 smplx::return_verts(true));
 
     auto vertices_pred = output.vertices.value(); // (1, 6890, 3)
+    // Transform from SMPL(x left, y up, z forward) to ROS (x fward, y left, z
+    // up)
+    vertices_pred = vertices_pred.squeeze(0);
+    vertices_pred = torch::matmul(vertices_pred, SMPL_TO_ROS_);
+    vertices_pred = vertices_pred.unsqueeze(0);
 
     // Update RViz
-    vis_->update_mesh(vertices_pred, faces_);
+    vis_->add_mesh(vertices_pred, faces_);
+
+    // create keypoints tensor (24 joints, 3D)
+    torch::Tensor keypoints =
+        torch::zeros({24, 3}, torch::kFloat64).to(device_);
+    for (int i = 0; i < 24; ++i) {
+      // assign keypoint from msg
+      keypoints.index_put_({i, 0},
+                           static_cast<double>(msg->keypoints[i * 3 + 0]));
+      keypoints.index_put_({i, 1},
+                           static_cast<double>(msg->keypoints[i * 3 + 1]));
+      keypoints.index_put_({i, 2},
+                           static_cast<double>(msg->keypoints[i * 3 + 2]));
+    }
+    // Apply change of basis to keypoints
+    keypoints = torch::matmul(keypoints, SMPL_TO_ROS_);
+    // Add body pose offsets
+    vis_->add_keypoints(keypoints);
+    vis_->add_skeleton(keypoints);
+    vis_->update_visualization();
   }
 
   // ---------------- ROS ----------------
@@ -100,7 +125,7 @@ private:
   torch::Tensor betas_;
   torch::Tensor faces_;
   torch::Device device_;
-
+  torch::Tensor SMPL_TO_ROS_;
   // ---------------- Visualization ----------------
   std::shared_ptr<SMPLRviz> vis_;
 

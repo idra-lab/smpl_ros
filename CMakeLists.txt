@@ -35,11 +35,10 @@ set(ZED_LIBS ${ZED_LIBRARIES} ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY})
 
 
 # Executable
-add_executable(fitting_smpl src/fitting_smpl_ros.cpp)
-add_executable(smpl_ros_viewer src/zed_smpl_tracking/smpl_ros_viewer.cpp)
+add_executable(fitting_smpl src/body_fitting/fitting_smpl_ros.cpp)
+add_executable(smpl_ros_viewer src/smpl_ros_viewer/smpl_ros_viewer.cpp)
 add_executable(zed_smpl_tracking
   src/zed_smpl_tracking/zed_smpl_tracking.cpp
-  src/zed_smpl_tracking/GLViewer.cpp
   src/zed_smpl_tracking/ClientPublisher.cpp
 )
 

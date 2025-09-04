@@ -5,6 +5,13 @@ from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
+    static_tf_broadcaster_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_tf_broadcaster',
+        output='screen',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', 'map1']
+    )
     # Declare launch arguments for configurability
     rviz_node = Node(
         package='rviz2',
@@ -33,6 +40,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        static_tf_broadcaster_node,
         rviz_node,
         model_path_arg,
         smpl_ros_viewer_node,
