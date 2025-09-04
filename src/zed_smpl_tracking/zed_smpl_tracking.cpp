@@ -1,4 +1,3 @@
-// smpl_publisher_main.cpp
 #include <atomic>
 #include <cmath>
 #include <functional>
@@ -12,6 +11,7 @@
 #include <Eigen/Dense>
 #include <rclcpp/rclcpp.hpp>
 
+#include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/zed_utils.hpp"
 
@@ -19,9 +19,29 @@ int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
 
   auto node = rclcpp::Node::make_shared("smpl_publisher_node");
-  // Create publisher for custom SMPL message
-  auto publisher =
+
+  // ------------------ Declare ROS2 Parameters ------------------
+  node->declare_parameter<std::string>("calibration_file",
+                                       "/home/nardi/smpl_ros/zed_calib3.json");
+  node->declare_parameter<std::string>("yolo_model_path",
+                                       "/home/nardi/smpl_ros/yolov8x-seg.onnx");
+  node->declare_parameter<int>("max_width", 1920);
+  node->declare_parameter<int>("max_height", 1080);
+  node->declare_parameter<bool>("publish_point_cloud", true);
+
+  std::string calib_file = node->get_parameter("calibration_file").as_string();
+  std::string yolo_model_path =
+      node->get_parameter("yolo_model_path").as_string();
+  int max_width = node->get_parameter("max_width").as_int();
+  int max_height = node->get_parameter("max_height").as_int();
+  bool publish_point_cloud =
+      node->get_parameter("publish_point_cloud").as_bool();
+
+  auto smpl_pub =
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
+  auto cloud_pub =
+      node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
+
   // --- ROS spinning in background thread ---
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
@@ -31,63 +51,67 @@ int main(int argc, char **argv) {
     exec_running = false;
   });
   RCLCPP_INFO(node->get_logger(), "ROS spinning thread started.");
-  // ----------------------------------------
+
+  // ------------------ ZED + SMPL Setup ------------------
   constexpr sl::COORDINATE_SYSTEM COORDINATE_SYSTEM =
       sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
-  // Transform from SMPL(x left, y up, z forward) to Camera (x fward, y left, z
-  // up)
+  constexpr sl::UNIT UNIT = sl::UNIT::METER;
   Eigen::Matrix4d T_SMPL_TO_ROS = smpl_to_ros_transform();
 
-  constexpr sl::UNIT UNIT = sl::UNIT::METER;
-
-  std::string path = "/home/nardi/smpl_ros/zed_calib3.json";
   auto configurations =
-      sl::readFusionConfigurationFile(path, COORDINATE_SYSTEM, UNIT);
-  if (configurations.empty())
+      sl::readFusionConfigurationFile(calib_file, COORDINATE_SYSTEM, UNIT);
+  if (configurations.empty()) {
+    RCLCPP_ERROR(node->get_logger(), "No ZED configurations found.");
     return EXIT_FAILURE;
+  }
 
-    RCLCPP_INFO(node->get_logger(), "Starting ZED SMPL tracking...");
+  RCLCPP_INFO(node->get_logger(), "Starting ZED SMPL tracking...");
   Trigger trigger;
   std::vector<ClientPublisher> clients(configurations.size());
   int id_ = 0, gpu_id = 0, nb_gpu = 0;
   cudaGetDeviceCount(&nb_gpu);
 
-  std::map<int, std::string> svo_files;
   for (auto conf : configurations) {
     if (conf.communication_parameters.getType() ==
         sl::CommunicationParameters::COMM_TYPE::INTRA_PROCESS) {
       gpu_id = id_ % nb_gpu;
-      auto state = clients[id_].open(conf.input_type, &trigger, gpu_id);
-      if (!state)
+      if (!clients[id_].open(conf.input_type, &trigger, gpu_id))
         continue;
-      if (conf.input_type.getType() == sl::InputType::INPUT_TYPE::SVO_FILE)
-        svo_files[id_] = conf.input_type.getConfiguration();
       id_++;
     }
   }
-  for (auto &it : clients)
-    it.start();
+
+  for (auto &client : clients)
+    client.start();
+
+  // Fusion initialization
   sl::InitFusionParameters init_params;
   init_params.coordinate_units = UNIT;
   init_params.coordinate_system = COORDINATE_SYSTEM;
   init_params.verbose = true;
-  sl::Resolution resolution(1280, 720);
+  sl::Resolution resolution(max_width, max_height);
   init_params.maximum_working_resolution = resolution;
 
   sl::Fusion fusion;
   fusion.init(init_params);
 
+  // Subscribe to cameras
   std::vector<sl::CameraIdentifier> cameras;
-  for (auto &it : configurations) {
-    sl::CameraIdentifier uuid(it.serial_number);
-    auto state = fusion.subscribe(uuid, it.communication_parameters, it.pose,
-                                  it.override_gravity);
-    if (state == sl::FUSION_ERROR_CODE::SUCCESS)
+  for (auto &conf : configurations) {
+    sl::CameraIdentifier uuid(conf.serial_number);
+    if (fusion.subscribe(uuid, conf.communication_parameters, conf.pose,
+                         conf.override_gravity) ==
+        sl::FUSION_ERROR_CODE::SUCCESS)
       cameras.push_back(uuid);
   }
-  if (cameras.empty())
+
+  if (cameras.empty()) {
+    RCLCPP_ERROR(node->get_logger(), "No cameras connected!");
     return EXIT_FAILURE;
+  }
   RCLCPP_INFO(node->get_logger(), "%ld ZED cameras connected.", cameras.size());
+
+  // Enable body tracking and fitting
   sl::BodyTrackingFusionParameters body_fusion_init_params;
   body_fusion_init_params.enable_tracking = true;
   body_fusion_init_params.enable_body_fitting = true;
@@ -96,21 +120,32 @@ int main(int argc, char **argv) {
   sl::BodyTrackingFusionRuntimeParameters body_tracking_runtime_parameters;
   body_tracking_runtime_parameters.skeleton_minimum_allowed_keypoints = 7;
   body_tracking_runtime_parameters.skeleton_minimum_allowed_camera =
-      cameras.size() / 2.;
+      cameras.size() / 2.0;
 
-  sl::Bodies fused_bodies; // reuse to avoid copy / double free
-  std::map<sl::CameraIdentifier, sl::Bodies> camera_raw_data;
-  sl::FusionMetrics metrics;
-  std::map<sl::CameraIdentifier, sl::Mat> views;
-  std::map<sl::CameraIdentifier, sl::Mat> pointClouds;
+  sl::Bodies fused_bodies; // reused
+  Yolov8Seg yolov8Seg;
+  cv::dnn::Net yolo_net;
+  if (publish_point_cloud) {
+    yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
+  }
 
-  // Prepare the fixed rotation camera -> SMPL as both matrix and quaternion.
-  // Camera: X right, Y down, Z forward
-  // SMPL:   X left,  Y up,   Z forward
-  // This is equivalent to a 180deg rotation around Z (diag(-1,-1,1)).
-
+  // ------------------ Main loop ------------------
   while (rclcpp::ok()) {
     trigger.notifyZED();
+
+    std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>> pcs(
+        clients.size());
+    if (publish_point_cloud) {
+      for (int i = 0; i < clients.size(); ++i) {
+        Eigen::Matrix4d Ts =
+            Eigen::Matrix4d::Identity(); // per-camera transform
+        pcs[i] = clients[i].getFilteredPointCloud(Ts, yolo_net, yolov8Seg);
+      }
+      auto merged_cloud = mergePointClouds(pcs);
+      publishMergedPointCloud(cloud_pub, merged_cloud, "map");
+    }
+
+    // SMPL processing
     if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS)
       continue;
     if (fusion.retrieveBodies(fused_bodies, body_tracking_runtime_parameters) !=
@@ -120,14 +155,14 @@ int main(int argc, char **argv) {
       continue;
 
     auto msg = build_smpl_msg(fused_bodies, 0, T_SMPL_TO_ROS, SMPL_TO_ZED);
-    publisher->publish(msg);
+    smpl_pub->publish(msg);
   }
 
-  // --- Shutdown ---
+  // ------------------ Shutdown ------------------
   trigger.running = false;
   trigger.notifyZED();
-  for (auto &it : clients)
-    it.stop();
+  for (auto &client : clients)
+    client.stop();
   fusion.close();
 
   exec.cancel();

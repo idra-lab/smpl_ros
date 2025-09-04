@@ -3,10 +3,57 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <sl/Camera.hpp>
 #include <thread>
 #include <vector>
 
+// SMPL to ROS homogenous transformation of coordinates
+inline Eigen::Matrix4d smpl_to_ros_transform() {
+  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+  T.block<3, 3>(0, 0) << 0, 1, 0, 0, 0, 1, 1, 0, 0;
+  return T;
+}
+// ---- SMPL -> ZED mapping
+static const std::map<int, int> SMPL_TO_ZED = {
+    {0, 0},   {1, 18},  {2, 19},  {3, 1},   {4, 20},  {5, 21},
+    {6, 2},   {7, 22},  {8, 23},  {9, 3},   {10, 28}, {11, 29},
+    {12, 4},  {13, 10}, {14, 11}, {15, 5},  {16, 12}, {17, 13},
+    {18, 14}, {19, 15}, {20, 16}, {21, 17}, {22, 30}, {23, 31},
+};
+
+// SMPL parents (standard 24-joint kinematic tree). -1 is root.
+static const int SMPL_PARENTS[24] = {
+    -1,
+    0,  // 1
+    0,  // 2
+    0,  // 3
+    1,  // 4
+    2,  // 5
+    3,  // 6
+    4,  // 7
+    5,  // 8
+    6,  // 9
+    7,  // 10
+    8,  // 11
+    9,  // 12
+    9,  // 13
+    9,  // 14
+    12, // 15
+    13, // 16
+    14, // 17
+    16, // 18
+    17, // 19
+    18, // 20
+    19, // 21
+    20, // 22
+    21  // 23
+};
+
+// Converts quaternion to rotation vector (axis-angle)
+// The output rotation vector is in the range [-pi, pi]
 static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   Eigen::Vector4d q;
   q(0) = q_in.x();
@@ -48,43 +95,7 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   return rvec;
 }
 
-// ---- SMPL -> ZED mapping
-static const std::map<int, int> SMPL_TO_ZED = {
-    {0, 0},   {1, 18},  {2, 19},  {3, 1},   {4, 20},  {5, 21},
-    {6, 2},   {7, 22},  {8, 23},  {9, 3},   {10, 28}, {11, 29},
-    {12, 4},  {13, 10}, {14, 11}, {15, 5},  {16, 12}, {17, 13},
-    {18, 14}, {19, 15}, {20, 16}, {21, 17}, {22, 30}, {23, 31},
-};
-
-// SMPL parents (standard 24-joint kinematic tree). -1 is root.
-static const int SMPL_PARENTS[24] = {
-    -1,
-    0,  // 1
-    0,  // 2
-    0,  // 3
-    1,  // 4
-    2,  // 5
-    3,  // 6
-    4,  // 7
-    5,  // 8
-    6,  // 9
-    7,  // 10
-    8,  // 11
-    9,  // 12
-    9,  // 13
-    9,  // 14
-    12, // 15
-    13, // 16
-    14, // 17
-    16, // 18
-    17, // 19
-    18, // 20
-    19, // 21
-    20, // 22
-    21  // 23
-};
-
-// ---- Helper: retrieve quaternion from ZED fused body
+// ---- Helper: retrieve quaternion from ZED fused body  ----
 Eigen::Quaterniond getZEDGlobalQuaternion(const sl::Bodies &bodies,
                                           int body_idx) {
   const sl::BodyData &body = bodies.body_list[body_idx];
@@ -96,6 +107,9 @@ Eigen::Quaterniond getZEDGlobalQuaternion(const sl::Bodies &bodies,
   out_q.z() = q.z;
   return out_q;
 }
+// Note: ZED local orientations are relative to the parent joint, so to get the
+// absolute orientation you need to chain-multiply the quaternions up to the
+// root.
 Eigen::Quaterniond getZEDLocalQuaternion(const sl::Bodies &bodies, int body_idx,
                                          int zed_kp_index) {
   const sl::BodyData &body = bodies.body_list[body_idx];
@@ -108,6 +122,8 @@ Eigen::Quaterniond getZEDLocalQuaternion(const sl::Bodies &bodies, int body_idx,
   return out_q;
 }
 
+// ---- Build SMPL message from ZED fused body and apply coordinate transforms
+// ----
 inline smpl_msgs::msg::Smpl
 build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
                const Eigen::Matrix4d &T_smpl_to_ros,
@@ -165,9 +181,84 @@ build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
 
   return msg;
 }
+// ---- Merge multiple point clouds into one ----
+inline std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+mergePointClouds(
+    const std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>>
+        &pcs) {
+  std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> merged;
 
-inline Eigen::Matrix4d smpl_to_ros_transform() {
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T.block<3, 3>(0, 0) << 0, 1, 0, 0, 0, 1, 1, 0, 0;
-  return T;
+  for (const auto &pc : pcs) {
+    merged.insert(merged.end(), pc.begin(), pc.end());
+  }
+
+  return merged;
+}
+
+void publishMergedPointCloud(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
+    const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+        &merged_cloud,
+    const std::string &frame_id = "map") {
+  sensor_msgs::msg::PointCloud2 cloud_msg;
+  cloud_msg.header.stamp = rclcpp::Clock().now();
+  cloud_msg.header.frame_id = frame_id;
+  cloud_msg.height = 1;
+  cloud_msg.width = static_cast<uint32_t>(merged_cloud.size());
+  cloud_msg.is_dense = true;
+  cloud_msg.point_step = 16; // 4 floats: x,y,z + rgb
+  cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width;
+  cloud_msg.data.resize(cloud_msg.row_step);
+
+  // Define fields
+  cloud_msg.fields.resize(4);
+  cloud_msg.fields[0].name = "x";
+  cloud_msg.fields[0].offset = 0;
+  cloud_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32;
+  cloud_msg.fields[0].count = 1;
+  cloud_msg.fields[1].name = "y";
+  cloud_msg.fields[1].offset = 4;
+  cloud_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32;
+  cloud_msg.fields[1].count = 1;
+  cloud_msg.fields[2].name = "z";
+  cloud_msg.fields[2].offset = 8;
+  cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
+  cloud_msg.fields[2].count = 1;
+  cloud_msg.fields[3].name = "rgb";
+  cloud_msg.fields[3].offset = 12;
+  cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
+  cloud_msg.fields[3].count = 1;
+
+  sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
+  sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
+  sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msg, "z");
+  sensor_msgs::PointCloud2Iterator<float> iter_rgb(cloud_msg, "rgb");
+
+  for (const auto &p : merged_cloud) {
+    const Eigen::Vector3d &pt = p.first;
+    const Eigen::Vector3d &col = p.second;
+
+    *iter_x = static_cast<float>(pt.x());
+    *iter_y = static_cast<float>(pt.y());
+    *iter_z = static_cast<float>(pt.z());
+
+    uint8_t r =
+        static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.x())) * 255.0);
+    uint8_t g =
+        static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.y())) * 255.0);
+    uint8_t b =
+        static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.z())) * 255.0);
+
+    uint32_t rgb = (static_cast<uint32_t>(r) << 16 |
+                    static_cast<uint32_t>(g) << 8 | static_cast<uint32_t>(b));
+
+    *iter_rgb = *reinterpret_cast<float *>(&rgb);
+
+    ++iter_x;
+    ++iter_y;
+    ++iter_z;
+    ++iter_rgb;
+  }
+
+  pub->publish(cloud_msg);
 }

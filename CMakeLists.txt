@@ -32,7 +32,11 @@ find_package(OpenCV)
 
 set(ZED_LIBS ${ZED_LIBRARIES} ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY})
 
-
+# Yolo
+add_library(yolov8 src/zed_smpl_tracking/yolov8/yolov8_seg.cpp src/zed_smpl_tracking/yolov8/yolov8_utils.cpp)
+target_include_directories(yolov8 PUBLIC include/zed_smpl_tracking/yolov8 ${CUDA_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(yolov8 ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY}
+  ${OpenCV_LIBRARIES} ${Open3D_LIBRARIES})
 
 # Executable
 add_executable(fitting_smpl src/body_fitting/fitting_smpl_ros.cpp)
@@ -73,7 +77,12 @@ link_directories(zed_smpl_tracking ${GLEW_LIBRARY_DIRS})
 link_directories(zed_smpl_tracking ${GLUT_LIBRARY_DIRS})
 link_directories(zed_smpl_tracking ${OpenGL_LIBRARY_DIRS})
 link_directories(zed_smpl_tracking ${OpenCV_LIBRARY_DIRS})
-target_link_libraries(zed_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(zed_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
+  Eigen3::Eigen
+  yolov8
+  torchure_smplx::smplx
+  ${TORCH_LIBRARIES}
+)
 
 ament_target_dependencies(fitting_smpl
   rclcpp
@@ -91,6 +100,7 @@ ament_target_dependencies(smpl_ros_viewer
 ament_target_dependencies(zed_smpl_tracking
   rclcpp
   smpl_msgs
+  sensor_msgs
 )
 
 # Install
