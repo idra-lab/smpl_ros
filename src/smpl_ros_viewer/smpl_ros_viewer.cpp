@@ -94,44 +94,44 @@ private:
     auto vertices_zero = output_zero.vertices.value().squeeze(0); // (6890, 3)
 
     // --- Apply global_orient + transl manually to vertices_zero ---
-    auto batch_rodrigues = [](const torch::Tensor &rot_vecs) {
-      auto device = rot_vecs.device();
-      auto dtype = rot_vecs.dtype();
+    // auto batch_rodrigues = [](const torch::Tensor &rot_vecs) {
+    //   auto device = rot_vecs.device();
+    //   auto dtype = rot_vecs.dtype();
 
-      auto theta =
-          torch::norm(rot_vecs, 2, /*dim=*/1, /*keepdim=*/true); // (B,1)
-      auto k = rot_vecs / (theta + 1e-8); // normalize axis
+    //   auto theta =
+    //       torch::norm(rot_vecs, 2, /*dim=*/1, /*keepdim=*/true); // (B,1)
+    //   auto k = rot_vecs / (theta + 1e-8); // normalize axis
 
-      auto kx = k.index({torch::indexing::Slice(), 0});
-      auto ky = k.index({torch::indexing::Slice(), 1});
-      auto kz = k.index({torch::indexing::Slice(), 2});
+    //   auto kx = k.index({torch::indexing::Slice(), 0});
+    //   auto ky = k.index({torch::indexing::Slice(), 1});
+    //   auto kz = k.index({torch::indexing::Slice(), 2});
 
-      auto zero = torch::zeros_like(kx);
-      auto K = torch::stack({torch::stack({zero, -kz, ky}, 1),
-                             torch::stack({kz, zero, -kx}, 1),
-                             torch::stack({-ky, kx, zero}, 1)},
-                            1); // (B,3,3)
+    //   auto zero = torch::zeros_like(kx);
+    //   auto K = torch::stack({torch::stack({zero, -kz, ky}, 1),
+    //                          torch::stack({kz, zero, -kx}, 1),
+    //                          torch::stack({-ky, kx, zero}, 1)},
+    //                         1); // (B,3,3)
 
-      auto I = torch::eye(3, dtype).to(device).unsqueeze(0); // (1,3,3)
-      auto theta_expanded = theta.view({-1, 1, 1});          // (B,1,1)
+    //   auto I = torch::eye(3, dtype).to(device).unsqueeze(0); // (1,3,3)
+    //   auto theta_expanded = theta.view({-1, 1, 1});          // (B,1,1)
 
-      return I + torch::sin(theta_expanded) * K +
-             (1 - torch::cos(theta_expanded)) * torch::matmul(K, K);
-    };
-    torch::Tensor rot_vec = global_orient_; // (1,3)
-    torch::Tensor rot_mat = batch_rodrigues(
-        rot_vec); // implement batch_rodrigues to convert 1x3 -> 3x3
-    torch::Tensor vertices_manual =
-        torch::matmul(vertices_zero, rot_mat.squeeze(0).transpose(0, 1));
-    vertices_manual += transl_;
+    //   return I + torch::sin(theta_expanded) * K +
+    //          (1 - torch::cos(theta_expanded)) * torch::matmul(K, K);
+    // };
+    // torch::Tensor rot_vec = global_orient_; // (1,3)
+    // torch::Tensor rot_mat = batch_rodrigues(
+        // rot_vec); // implement batch_rodrigues to convert 1x3 -> 3x3
+    // torch::Tensor vertices_manual =
+    //     torch::matmul(vertices_zero, rot_mat.squeeze(0).transpose(0, 1));
+    // vertices_manual += transl_;
 
     // --- Transform to ROS axes ---
     vertices_param = torch::matmul(vertices_param, SMPL_TO_ROS_);
-    vertices_manual = torch::matmul(vertices_manual, SMPL_TO_ROS_);
+    // vertices_manual = torch::matmul(vertices_manual, SMPL_TO_ROS_);
 
     // --- Update RViz ---
     vis_->add_mesh(vertices_param.unsqueeze(0), faces_);
-    vis_->add_mesh(vertices_manual.unsqueeze(0), faces_);
+    // vis_->add_mesh(vertices_manual.unsqueeze(0), faces_);
 
     // --- Keypoints ---
     torch::Tensor keypoints =

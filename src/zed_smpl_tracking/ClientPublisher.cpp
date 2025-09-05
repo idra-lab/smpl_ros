@@ -14,6 +14,7 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
   init_parameters.coordinate_units = sl::UNIT::METER;
   init_parameters.depth_stabilization = 30;
   init_parameters.sdk_gpu_id = sdk_gpu_id;
+  // set ROS coordinate system
   init_parameters.coordinate_system =
       sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
   init_parameters.camera_resolution = sl::RESOLUTION::HD720;
@@ -111,7 +112,9 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
   // 1️⃣ Grab RGB image
   sl::Mat sl_image;
   if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS)
+  {
     return points_colors;
+  }
 
   cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
                   sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
@@ -156,8 +159,9 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
         continue;
 
       // Mask is relative to bbox
-      if (human_mask.at<uchar>(y - human_bbox.y, x - human_bbox.x) == 0)
+      if (human_mask.at<uchar>(y - human_bbox.y, x - human_bbox.x) == 0){
         continue;
+      }
 
       int idx = (y * width + x) * 4;
       float X = ptr[idx + 0];
@@ -166,7 +170,9 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
       float rgba_f = ptr[idx + 3];
 
       if (!std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
+      {
         continue;
+      }
 
       Eigen::Vector4d pt(X, Y, Z, 1.0);
       Eigen::Vector3d pt_transformed = (T * pt).head<3>();

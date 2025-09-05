@@ -18,6 +18,11 @@ inline Eigen::Matrix4d smpl_to_ros_transform() {
   T.block<3, 3>(0, 0) << 0, 1, 0, 0, 0, 1, 1, 0, 0;
   return T;
 }
+inline Eigen::Matrix4d ros_to_image_transform() {
+  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+  T.block<3, 3>(0, 0) << 0, 0, 1, -1, 0, 0, 0, -1, 0;
+  return T;
+}
 // ---- SMPL -> ZED mapping
 static const std::map<int, int> SMPL_TO_ZED = {
     {0, 0},   {1, 18},  {2, 19},  {3, 1},   {4, 20},  {5, 21},

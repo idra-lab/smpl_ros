@@ -57,13 +57,15 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(), "ROS spinning thread started.");
 
   // ------------------ ZED + SMPL Setup ------------------
-  constexpr sl::COORDINATE_SYSTEM COORDINATE_SYSTEM =
-      sl::COORDINATE_SYSTEM::IMAGE;
+  // calibration must be done in IMAGE frame but we want data in ROS frame ->
+  // ZED automatically converts the read JSON extrinsics to ROS frame
+  constexpr sl::COORDINATE_SYSTEM ROS_COORDINATE_SYSTEM =
+      sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
   constexpr sl::UNIT UNIT = sl::UNIT::METER;
   Eigen::Matrix4d T_SMPL_TO_ROS = smpl_to_ros_transform();
 
   auto configurations =
-      sl::readFusionConfigurationFile(calib_file, COORDINATE_SYSTEM, UNIT);
+      sl::readFusionConfigurationFile(calib_file, ROS_COORDINATE_SYSTEM, UNIT);
 
   if (configurations.empty()) {
     RCLCPP_ERROR(node->get_logger(), "No ZED configurations found.");
@@ -75,7 +77,7 @@ int main(int argc, char **argv) {
     auto T = slTransformToEigen(configurations[i].pose);
     T_cams_extrinsics[configurations[i].serial_number] = T;
     std::cout << "Camera SN" << configurations[i].serial_number
-              << " extrinsics:\n"
+              << "extrinsics in ROS frame:\n"
               << T << std::endl;
   }
   broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics);
@@ -102,7 +104,7 @@ int main(int argc, char **argv) {
   // Fusion initialization
   sl::InitFusionParameters init_params;
   init_params.coordinate_units = UNIT;
-  init_params.coordinate_system = COORDINATE_SYSTEM;
+  init_params.coordinate_system = ROS_COORDINATE_SYSTEM;
   init_params.verbose = true;
   sl::Resolution resolution(max_width, max_height);
   init_params.maximum_working_resolution = resolution;
