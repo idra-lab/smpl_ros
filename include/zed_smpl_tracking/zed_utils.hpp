@@ -181,6 +181,13 @@ build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
     const auto &kp = body.keypoint.at(SMPL_TO_ZED.at(j));
     Eigen::Vector4d kp_h(kp.x, kp.y, kp.z, 1.0);
     Eigen::Vector4d kp_smpl = T_smpl_to_ros * kp_h;
+    // check for NaNs and set them to zero
+    if (std::isnan(kp_smpl.x()) || std::isnan(kp_smpl.y()) ||
+        std::isnan(kp_smpl.z())) {
+      kp_smpl.x() = 0.0;
+      kp_smpl.y() = 0.0;
+      kp_smpl.z() = 0.0;
+    }
     msg.keypoints[j * 3 + 0] = kp_smpl.x();
     msg.keypoints[j * 3 + 1] = kp_smpl.y();
     msg.keypoints[j * 3 + 2] = kp_smpl.z();
@@ -221,18 +228,18 @@ Eigen::Matrix4d slTransformToEigen(const sl::Transform &T) {
 }
 static void broadcastStaticCameras(
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster,
-    const std::map<int, Eigen::Matrix4d> &T_cams_extrinsics,
+    const std::vector<Eigen::Matrix4d> &T_cams_extrinsics, std::vector<int> cam_ids,
     const std::string &parent_frame = "map") {
-
-  for (const auto &pair : T_cams_extrinsics) {
-    int i = pair.first;
-    const Eigen::Matrix4d &T = pair.second;
-    std::string sn = std::to_string(i);
+    
+  int i = 0;
+  for (const auto &T : T_cams_extrinsics) {
+    std::string sn = std::to_string(cam_ids[i]);
+    i++;
     // create transform message
     geometry_msgs::msg::TransformStamped t;
     t.header.stamp = rclcpp::Clock().now();
     t.header.frame_id = parent_frame;
-    t.child_frame_id = "cam_" + std::to_string(i) + sn;
+    t.child_frame_id = "cam" + std::to_string(i) + "_" + sn;
 
     // translation
     t.transform.translation.x = T(0, 3);

@@ -45,6 +45,7 @@ add_executable(smpl_ros_viewer src/smpl_ros_viewer/smpl_ros_viewer.cpp)
 add_executable(zed_smpl_tracking
   src/zed_smpl_tracking/zed_smpl_tracking.cpp
   src/zed_smpl_tracking/ClientPublisher.cpp
+  src/zed_smpl_tracking/GLViewer.cpp
 )
 
 # Fitting SMPL

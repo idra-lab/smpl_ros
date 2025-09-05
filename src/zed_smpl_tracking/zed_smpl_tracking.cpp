@@ -14,6 +14,8 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
+#include "zed_smpl_tracking/GLViewer.hpp"
+#include "zed_smpl_tracking/fuseSkeletons.hpp"
 #include "zed_smpl_tracking/zed_utils.hpp"
 
 int main(int argc, char **argv) {
@@ -71,16 +73,6 @@ int main(int argc, char **argv) {
     RCLCPP_ERROR(node->get_logger(), "No ZED configurations found.");
     return EXIT_FAILURE;
   }
-  std::map<int, Eigen::Matrix4d> T_cams_extrinsics;
-  for (int i = 0; i < configurations.size(); i++) {
-    // print camera transform
-    auto T = slTransformToEigen(configurations[i].pose);
-    T_cams_extrinsics[configurations[i].serial_number] = T;
-    std::cout << "Camera SN" << configurations[i].serial_number
-              << "extrinsics in ROS frame:\n"
-              << T << std::endl;
-  }
-  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics);
 
   RCLCPP_INFO(node->get_logger(), "Starting ZED SMPL tracking...");
   Trigger trigger;
@@ -98,6 +90,9 @@ int main(int argc, char **argv) {
     }
   }
 
+  GLViewer viewer;
+  viewer.init(argc, argv);
+
   for (auto &client : clients)
     client.start();
 
@@ -113,14 +108,25 @@ int main(int argc, char **argv) {
   fusion.init(init_params);
 
   // Subscribe to cameras
+  std::vector<Eigen::Matrix4d> T_cams_extrinsics;
+
   std::vector<sl::CameraIdentifier> cameras;
+  std::vector<int> cam_ids;
   for (auto &conf : configurations) {
+    auto T = slTransformToEigen(conf.pose);
+    T_cams_extrinsics.push_back(T);
     sl::CameraIdentifier uuid(conf.serial_number);
+    fusion.updatePose(uuid, conf.pose);
     if (fusion.subscribe(uuid, conf.communication_parameters, conf.pose,
                          conf.override_gravity) ==
         sl::FUSION_ERROR_CODE::SUCCESS)
       cameras.push_back(uuid);
+    cam_ids.push_back(conf.serial_number);
   }
+  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics, cam_ids,
+                         "map");
+
+  // Ensure that fusion poses are set
 
   if (cameras.empty()) {
     RCLCPP_ERROR(node->get_logger(), "No cameras connected!");
@@ -139,7 +145,16 @@ int main(int argc, char **argv) {
   body_tracking_runtime_parameters.skeleton_minimum_allowed_camera =
       cameras.size() / 2.0;
 
-  sl::Bodies fused_bodies; // reused
+  //   --- Safely retrieve per-camera data ---
+  std::map<sl::CameraIdentifier, sl::Bodies> camera_raw_data;
+  sl::FusionMetrics metrics;
+  std::map<sl::CameraIdentifier, sl::Mat> views;
+  std::map<sl::CameraIdentifier, sl::Mat> pointClouds;
+
+  sl::Bodies fused_bodies;
+  std::vector<sl::Bodies> raw_bodies_vector;
+  sl::Bodies test;
+
   Yolov8Seg yolov8Seg;
   cv::dnn::Net yolo_net;
   if (publish_point_cloud) {
@@ -147,31 +162,72 @@ int main(int argc, char **argv) {
   }
 
   // ------------------ Main loop ------------------
-  while (rclcpp::ok()) {
+  while (rclcpp::ok() && viewer.isAvailable()) {
     trigger.notifyZED();
 
     std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>> pcs(
         clients.size());
     if (publish_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
-        pcs[i] = clients[i].getFilteredPointCloud(
-            T_cams_extrinsics[clients[i].serial], yolo_net, yolov8Seg);
+        pcs[i] = clients[i].getFilteredPointCloud(T_cams_extrinsics[i],
+                                                  yolo_net, yolov8Seg);
       }
       auto merged_cloud = mergePointClouds(pcs);
       publishMergedPointCloud(cloud_pub, merged_cloud, "map");
     }
 
     // SMPL processing
-    if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS)
+    if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS) {
+      RCLCPP_WARN(node->get_logger(), "Could not process fusion step");
       continue;
-    if (fusion.retrieveBodies(fused_bodies, body_tracking_runtime_parameters) !=
-        sl::FUSION_ERROR_CODE::SUCCESS)
-      continue;
-    if (fused_bodies.body_list.empty())
-      continue;
+    }
 
-    auto msg = build_smpl_msg(fused_bodies, 0, T_SMPL_TO_ROS, SMPL_TO_ZED);
+    // This produces a wrong result even though singular cameras have correct
+    // bodies if (fusion.retrieveBodies(fused_bodies,
+    // body_tracking_runtime_parameters) !=
+    //     sl::FUSION_ERROR_CODE::SUCCESS) {
+    //   RCLCPP_WARN(node->get_logger(), "Could not retrieve bodies");
+    //   continue;
+    // }
+    // if (fused_bodies.body_list.empty()) {
+    //   RCLCPP_WARN(node->get_logger(), "No bodies found");
+    //   continue;
+    // }
+    // Prepare per-camera BodyData vector
+    // for (size_t i = 0; i < cameras.size(); i++) {
+    //   sl::Bodies temp_camera_bodies;
+    //   clients[i].zed.retrieveBodies(temp_camera_bodies);
+    //   if (temp_camera_bodies.body_list.empty()) {
+    //     continue;
+    //   }
+    //   // Take the first body detected
+    //   // raw_bodies_vector.push_back(temp_camera_bodies.body_list[0]);
+    // }
+
+    // Merge the bodies into a single fused BodyData
+    // if (!raw_bodies_vector.empty()) {
+    // sl::BodyData fusedBody =
+    //     mergeBodiesWithExtrinsics(raw_bodies_vector, T_cams_extrinsics);
+
+    // Prepare fused Bodies message
+    // RCLCPP_INFO(node->get_logger(), "Fused body with %ld keypoints.",
+    //             fusedBody.keypoint.size());
+    // sl::Bodies fusedBodies;
+    // fusedBodies.body_list.push_back(fusedBody);
+
+    // TODO FIX FUSION
+
+
+    clients[0].zed.retrieveBodies(test, body_tracking_runtime_parameters);
+    if (test.body_list.empty()) {
+      RCLCPP_WARN(node->get_logger(), "No bodies found");
+      continue;
+    }
+    // Build and publish SMPL message
+    auto msg = build_smpl_msg(test, 0, T_SMPL_TO_ROS, SMPL_TO_ZED);
     smpl_pub->publish(msg);
+    // raw_bodies_vector.clear();
+    // }
   }
 
   // ------------------ Shutdown ------------------

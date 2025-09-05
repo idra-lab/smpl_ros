@@ -9,11 +9,13 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
   p_trigger = ref;
 
   sl::InitParameters init_parameters;
-  init_parameters.depth_mode = sl::DEPTH_MODE::NEURAL;
+  init_parameters.depth_mode = sl::DEPTH_MODE::NEURAL_PLUS;
   init_parameters.input = input;
   init_parameters.coordinate_units = sl::UNIT::METER;
   init_parameters.depth_stabilization = 30;
   init_parameters.sdk_gpu_id = sdk_gpu_id;
+  // set max_depth to 10m
+  init_parameters.depth_maximum_distance = 4.0;
   // set ROS coordinate system
   init_parameters.coordinate_system =
       sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
@@ -47,7 +49,7 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
       sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
   body_tracking_parameters.body_format = sl::BODY_FORMAT::BODY_38;
   body_tracking_parameters.enable_body_fitting = true;
-  body_tracking_parameters.enable_tracking = true;
+  body_tracking_parameters.enable_tracking = false;
   state = zed.enableBodyTracking(body_tracking_parameters);
   if (state != sl::ERROR_CODE::SUCCESS) {
     std::cout << "Error: " << state << std::endl;

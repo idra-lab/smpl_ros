@@ -38,8 +38,9 @@ struct Trigger {
 
 class ClientPublisher {
 
-public:
+  public:
   int serial;
+  sl::Camera zed;
   ClientPublisher();
   ~ClientPublisher();
 
@@ -53,7 +54,6 @@ public:
                         Yolov8Seg &yolov8Seg);
 
 private:
-  sl::Camera zed;
   void work();
   std::thread runner;
   std::mutex mtx;
