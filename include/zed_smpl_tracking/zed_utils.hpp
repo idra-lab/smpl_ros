@@ -115,7 +115,7 @@ std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
 
     // --- Root pose ---
     body.root_position = Eigen::Vector3d(
-        zed_body.keypoint[0].x, zed_body.keypoint[0].y, zed_body.keypoint[0].z);
+        zed_body.keypoint[2].x, zed_body.keypoint[2].y, zed_body.keypoint[2].z);
     body.global_orientation = Eigen::Quaterniond(
         zed_body.global_root_orientation.w, zed_body.global_root_orientation.x,
         zed_body.global_root_orientation.y, zed_body.global_root_orientation.z);

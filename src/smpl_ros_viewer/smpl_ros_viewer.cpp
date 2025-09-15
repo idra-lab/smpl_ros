@@ -41,7 +41,7 @@ public:
     smpl_->eval();
     faces_ = smpl_->faces();
 
-    // Allocate body pose tensor (69 DOF) and translation
+    // Allocate tensors for SMPL parameters
     const int batch_size = 1;
     body_pose_ = torch::zeros({batch_size, 69}, torch::kFloat64).to(device_);
     transl_ = torch::zeros({batch_size, 3}, torch::kFloat64).to(device_);
@@ -85,23 +85,13 @@ private:
                                  smplx::global_orient(global_orient_),
                                  smplx::betas(betas_), smplx::transl(transl_),
                                  smplx::return_verts(true));
-    auto vertices_param = output.vertices.value().squeeze(0); // (6890, 3)
+    auto smpl_vertices = output.vertices.value().squeeze(0); // (6890, 3)
 
-    // --- 2) SMPL output with zero global orientation ---
-    auto output_zero = smpl_->forward(
-        smplx::body_pose(body_pose_),
-        smplx::global_orient(torch::zeros({1, 3}, torch::kFloat64).to(device_)),
-        smplx::betas(betas_),
-        smplx::transl(torch::zeros({1, 3}, torch::kFloat64).to(device_)),
-        smplx::return_verts(true));
-    auto vertices_zero = output_zero.vertices.value().squeeze(0); // (6890, 3)
     // --- Transform to ROS axes ---
-    vertices_param = torch::matmul(vertices_param, SMPL_TO_ROS_);
-    // vertices_manual = torch::matmul(vertices_manual, SMPL_TO_ROS_);
+    smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_); 
 
     // --- Update RViz ---
-    vis_->add_mesh(vertices_param.unsqueeze(0), faces_);
-    // vis_->add_mesh(vertices_manual.unsqueeze(0), faces_);
+    vis_->add_mesh(smpl_vertices.unsqueeze(0), faces_);
 
     // --- Keypoints ---
     torch::Tensor keypoints =
