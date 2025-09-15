@@ -1,4 +1,5 @@
 #pragma once
+#include "bodyStruct.hpp"
 #include <Eigen/Dense>
 #include <atomic>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -102,52 +103,76 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   return rvec;
 }
 
-// ---- Helper: retrieve quaternion from ZED fused body  ----
-Eigen::Quaterniond getZEDGlobalQuaternion(const sl::Bodies &bodies,
-                                          int body_idx) {
-  const sl::BodyData &body = bodies.body_list[body_idx];
-  auto q = body.global_root_orientation;
-  Eigen::Quaterniond out_q;
-  out_q.w() = q.w;
-  out_q.x() = q.x;
-  out_q.y() = q.y;
-  out_q.z() = q.z;
-  return out_q;
-}
-// Note: ZED local orientations are relative to the parent joint, so to get the
-// absolute orientation you need to chain-multiply the quaternions up to the
-// root.
-Eigen::Quaterniond getZEDLocalQuaternion(const sl::Bodies &bodies, int body_idx,
-                                         int zed_kp_index) {
-  const sl::BodyData &body = bodies.body_list[body_idx];
-  auto q = body.local_orientation_per_joint[zed_kp_index];
-  Eigen::Quaterniond out_q;
-  out_q.w() = q.w;
-  out_q.x() = q.x;
-  out_q.y() = q.y;
-  out_q.z() = q.z;
-  return out_q;
+// ---- Extract Body from sl::Body ----
+std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
+                                  const std::map<int, int> &SMPL_TO_ZED) {
+  std::vector<Body> bodies;
+  bodies.reserve(zed_bodies.size());
+
+  for (size_t i = 0; i < zed_bodies.size(); ++i) {
+    const auto &zed_body = zed_bodies[i];
+    Body body;
+
+    // --- Root pose ---
+    body.root_position = Eigen::Vector3d(
+        zed_body.keypoint[0].x, zed_body.keypoint[0].y, zed_body.keypoint[0].z);
+    auto q = zed_body.global_root_orientation;
+    body.global_orientation.w() = q.w;
+    body.global_orientation.x() = q.x;
+    body.global_orientation.y() = q.y;
+    body.global_orientation.z() = q.z;
+    body.global_orientation.normalize();
+    RCLCPP_INFO_STREAM(
+        rclcpp::get_logger("zed_smpl_tracking"),
+        "Body " << i << " root pos: " << body.root_position.transpose()
+                << " orient: " << zed_body.global_root_orientation.w << ","
+                << zed_body.global_root_orientation.x << ","
+                << zed_body.global_root_orientation.y << ","
+                << zed_body.global_root_orientation.z);
+    // --- Local orientations ---
+    for (int j = 1; j < 24; ++j) {
+      auto it = SMPL_TO_ZED.find(j);
+      if (it != SMPL_TO_ZED.end()) {
+        int zed_idx = it->second;
+        // Note: ZED local orientations are relative to the parent joint, so to
+        // get the absolute orientation you need to chain-multiply the
+        // quaternions up to the root.
+        auto q = zed_body.local_orientation_per_joint;
+        body.local_orient[j] = Eigen::Quaterniond(q[zed_idx].w, q[zed_idx].x,
+                                                  q[zed_idx].y, q[zed_idx].z);
+      }
+    }
+
+    // --- Keypoints ---
+    for (int j = 0; j < 24; ++j) {
+      int zed_idx = SMPL_TO_ZED.at(j);
+      const auto &kp = zed_body.keypoint.at(zed_idx);
+      body.keypoints[j] = Eigen::Vector3d(kp.x, kp.y, kp.z);
+    }
+
+    bodies.push_back(std::move(body));
+  }
+
+  return bodies;
 }
 
-// ---- Build SMPL message from ZED fused body and apply coordinate transforms
-// ----
+// ---- Build SMPL message from ZED fused body and apply transforms ----
 inline smpl_msgs::msg::Smpl
-build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
-               const Eigen::Matrix4d &T_smpl_to_ros,
-               const std::map<int, int> &SMPL_TO_ZED) {
+buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros) {
   smpl_msgs::msg::Smpl msg;
-  const auto &body = fused_bodies.body_list[body_idx];
   Eigen::Matrix3d R_change = T_smpl_to_ros.block<3, 3>(0, 0);
 
   // --- Root joint ---
-  Eigen::Vector3d root_pos(body.keypoint[0].x, body.keypoint[0].y,
-                           body.keypoint[0].z);
-  Eigen::Quaterniond root_quat(getZEDGlobalQuaternion(fused_bodies, body_idx));
   Eigen::Matrix4d T_root = Eigen::Matrix4d::Identity();
-  T_root.block<3, 3>(0, 0) = root_quat.toRotationMatrix();
-  T_root.block<3, 1>(0, 3) = root_pos;
+  T_root.block<3, 3>(0, 0) = body.global_orientation.toRotationMatrix();
+  T_root.block<3, 1>(0, 3) = body.root_position;
+  RCLCPP_INFO_STREAM(rclcpp::get_logger("zed_smpl_tracking"),
+                     "Root: " << T_root);
+
+  // change of basis to convert SMPL world to ROS world
   Eigen::Matrix4d T_root_smpl =
       T_smpl_to_ros * T_root * T_smpl_to_ros.inverse();
+
   Eigen::Vector3d root_pos_smpl = T_root_smpl.block<3, 1>(0, 3);
   Eigen::Quaterniond root_quat_smpl(T_root_smpl.block<3, 3>(0, 0));
   Eigen::Vector3d root_rvec_smpl = quatToRotVec(root_quat_smpl);
@@ -161,16 +186,12 @@ build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
 
   // --- Local joints ---
   for (int j = 1; j < 24; ++j) {
-    Eigen::Quaterniond q_local_ros = Eigen::Quaterniond::Identity();
-    auto it = SMPL_TO_ZED.find(j);
-    if (it != SMPL_TO_ZED.end()) {
-      int zed_idx = it->second;
-      q_local_ros = getZEDLocalQuaternion(fused_bodies, body_idx, zed_idx);
-    }
+    Eigen::Quaterniond q_local_ros = body.local_orient.at(j);
     Eigen::Matrix3d R_local_smpl =
         R_change * q_local_ros.toRotationMatrix() * R_change.inverse();
     Eigen::Vector3d rvec_local_smpl =
         quatToRotVec(Eigen::Quaterniond(R_local_smpl));
+
     msg.body_pose[(j - 1) * 3 + 0] = rvec_local_smpl.x();
     msg.body_pose[(j - 1) * 3 + 1] = rvec_local_smpl.y();
     msg.body_pose[(j - 1) * 3 + 2] = rvec_local_smpl.z();
@@ -178,16 +199,17 @@ build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
 
   // --- Keypoints ---
   for (int j = 0; j < 24; ++j) {
-    const auto &kp = body.keypoint.at(SMPL_TO_ZED.at(j));
-    Eigen::Vector4d kp_h(kp.x, kp.y, kp.z, 1.0);
+    const auto &kp = body.keypoints.at(j); // already in SMPL order
+    Eigen::Vector4d kp_h(kp.x(), kp.y(), kp.z(), 1.0);
     Eigen::Vector4d kp_smpl = T_smpl_to_ros * kp_h;
-    // check for NaNs and set them to zero
+
     if (std::isnan(kp_smpl.x()) || std::isnan(kp_smpl.y()) ||
         std::isnan(kp_smpl.z())) {
-      kp_smpl.x() = 0.0;
-      kp_smpl.y() = 0.0;
-      kp_smpl.z() = 0.0;
+      RCLCPP_WARN(rclcpp::get_logger("zed_smpl_tracking"),
+                  "NaN keypoint detected, setting to zero.");
+      kp_smpl.head<3>().setZero();
     }
+
     msg.keypoints[j * 3 + 0] = kp_smpl.x();
     msg.keypoints[j * 3 + 1] = kp_smpl.y();
     msg.keypoints[j * 3 + 2] = kp_smpl.z();
@@ -195,6 +217,7 @@ build_smpl_msg(const sl::Bodies &fused_bodies, int body_idx,
 
   return msg;
 }
+
 // ---- Merge multiple point clouds into one ----
 inline std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
 mergePointClouds(
@@ -228,9 +251,9 @@ Eigen::Matrix4d slTransformToEigen(const sl::Transform &T) {
 }
 static void broadcastStaticCameras(
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster,
-    const std::vector<Eigen::Matrix4d> &T_cams_extrinsics, std::vector<int> cam_ids,
-    const std::string &parent_frame = "map") {
-    
+    const std::vector<Eigen::Matrix4d> &T_cams_extrinsics,
+    std::vector<int> cam_ids, const std::string &parent_frame = "map") {
+
   int i = 0;
   for (const auto &T : T_cams_extrinsics) {
     std::string sn = std::to_string(cam_ids[i]);
