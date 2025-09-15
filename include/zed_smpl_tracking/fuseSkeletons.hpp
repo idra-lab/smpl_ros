@@ -65,7 +65,7 @@ Body mergeBodiesWithExtrinsics(
     // Transform keypoints and orientations
     for (size_t j = 0; j < num_joints; j++) {
       body.keypoints[j] = transformPoint(body.keypoints[j], T);
-      body.local_orient[j] = transformQuaternion(body.local_orient[j], T);
+      body.local_orient[j] = body.local_orient[j]; 
     }
 
     // Transform root
@@ -123,10 +123,6 @@ Body mergeBodiesWithExtrinsics(
 
   merged.root_position = sum_root / static_cast<double>(num_bodies);
   merged.global_orientation = averageQuaternionsSVD(root_quats);
-
-  RCLCPP_INFO(rclcpp::get_logger("mergeBodiesWithExtrinsics"),
-              "Merged %zu bodies into one with %zu keypoints.", num_bodies,
-              merged.keypoints.size());
 
   return merged;
 }

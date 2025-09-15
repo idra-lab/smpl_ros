@@ -47,6 +47,7 @@ public:
 
   /// Run the full optimization pipeline
   void run_optimization() {
+    dump_parameters_json(); // dump initial parameters
     RCLCPP_INFO(this->get_logger(), "Starting optimization...");
 
     // Optimize translation
@@ -68,7 +69,7 @@ public:
     optimize({betas_}, config_["shape"]["lr"], config_["shape"]["it"], "Shape");
 
     // Dump final parameters to JSON
-    // dump_parameters_json();
+    dump_parameters_json();
 
     RCLCPP_INFO(this->get_logger(), "Optimization complete.");
     rclcpp::shutdown();
@@ -239,23 +240,37 @@ private:
 
   // -------------------- Dump final parameters --------------------
   void dump_parameters_json() {
+    auto torch_to_std_vector = [](const torch::Tensor &tensor) {
+      std::vector<double> vec(tensor.numel());
+      for(int i=0; i<tensor[0].numel(); i++) {
+        if (std::isnan(tensor[0][i].item<double>())) {
+          RCLCPP_WARN(rclcpp::get_logger("dump_parameters_json"),
+                      "NaN detected in parameters, setting to zero.");
+          tensor[0][i] = 0.0;
+        }
+        vec[i] = tensor[0][i].item<double>();
+      }
+      return vec;
+    };
+    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping betas with sizes: "
+                                              << betas_.sizes());
+    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping body_pose with sizes: "
+                                              << body_pose_.sizes());
+    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping global_orient with sizes: "
+                                              << global_orient_.sizes());
+    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping transl with sizes: "
+                                              << transl_.sizes());
     nlohmann::json j;
-    j["betas"] = std::vector<double>(
-        betas_.data_ptr<double>(), betas_.data_ptr<double>() + betas_.numel());
-    j["body_pose"] =
-        std::vector<double>(body_pose_.data_ptr<double>(),
-                            body_pose_.data_ptr<double>() + body_pose_.numel());
-    j["global_orient"] = std::vector<double>(global_orient_.data_ptr<double>(),
-                                             global_orient_.data_ptr<double>() +
-                                                 global_orient_.numel());
-    j["transl"] =
-        std::vector<double>(transl_.data_ptr<double>(),
-                            transl_.data_ptr<double>() + transl_.numel());
+    j["betas"] = torch_to_std_vector(betas_);
+    j["body_pose"] = torch_to_std_vector(body_pose_);
+    j["global_orient"] = torch_to_std_vector(global_orient_);
+    j["transl"] = torch_to_std_vector(transl_);
 
     std::ofstream out("optimized_params.json");
     out << std::setw(4) << j << std::endl;
     RCLCPP_INFO(this->get_logger(),
                 "Dumped optimized parameters to optimized_params.json");
+    out.close();
   }
 
   // -------------------- Member Variables --------------------

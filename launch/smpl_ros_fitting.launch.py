@@ -2,6 +2,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from launch.actions import TimerAction
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
@@ -11,7 +12,7 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz2',
         output='screen',
-        arguments=['-d', get_package_share_directory('smpl_ros') + '/rviz/vis.rviz']
+        arguments=['-d', get_package_share_directory('smpl_ros') + '/rviz/fitting.rviz']
     )
     
     model_path_arg = DeclareLaunchArgument(
@@ -44,11 +45,16 @@ def generate_launch_description():
             'point_cloud_path': LaunchConfiguration('point_cloud_path')
         }]
     )
+    delayed_fitting_smpl_node = TimerAction(
+        period=2.0,
+        actions=[fitting_smpl_node]
+    )
+    # Execute after 3 seconds delay to ensure RViz is ready
 
     return LaunchDescription([
         rviz_node,
         model_path_arg,
         config_path_arg,
         point_cloud_path_arg,
-        fitting_smpl_node,
+        delayed_fitting_smpl_node,
     ])

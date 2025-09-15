@@ -7,9 +7,9 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-static const int SMPL_PARENTS[24] = {
-    -1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19,20,21
-};
+static const int SMPL_PARENTS[24] = {-1, 0,  0,  0,  1,  2,  3,  4,
+                                     5,  6,  7,  8,  9,  9,  9,  12,
+                                     13, 14, 16, 17, 18, 19, 20, 21};
 
 class SMPLRviz {
 public:
@@ -84,6 +84,43 @@ public:
 
     markers_.markers.push_back(kp);
   }
+  void add_arrow(const torch::Tensor &start, const torch::Tensor &end,
+                 const std::string &ns = "arrows", float r = 0.0, float g = 0.0,
+                 float b = 1.0) {
+    if (start.sizes() != end.sizes() || start.sizes().size() != 1 ||
+        start.size(0) != 3) {
+      RCLCPP_ERROR(rclcpp::get_logger("SMPLRviz"),
+                   "add_arrow: start and end must be 1D tensors of size 3");
+      return;
+    }
+
+    visualization_msgs::msg::Marker arrow;
+    arrow.header.frame_id = frame_id_;
+    arrow.ns = ns;
+    arrow.id = next_marker_id_++;
+    arrow.type = visualization_msgs::msg::Marker::ARROW;
+    arrow.action = visualization_msgs::msg::Marker::ADD;
+    arrow.scale.x = 0.02; // shaft diameter
+    arrow.scale.y = 0.04; // head diameter
+    arrow.scale.z = 0.1;  // head length
+    arrow.color.a = 1.0;
+    arrow.color.r = r;
+    arrow.color.g = g;
+    arrow.color.b = b;
+
+    geometry_msgs::msg::Point p_start, p_end;
+    p_start.x = start.index({0}).item<double>();
+    p_start.y = start.index({1}).item<double>();
+    p_start.z = start.index({2}).item<double>();
+    p_end.x = end.index({0}).item<double>();
+    p_end.y = end.index({1}).item<double>();
+    p_end.z = end.index({2}).item<double>();
+
+    arrow.points.push_back(p_start);
+    arrow.points.push_back(p_end);
+
+    markers_.markers.push_back(arrow);
+  }
 
   void add_skeleton(const torch::Tensor &keypoints) {
     visualization_msgs::msg::Marker skel;
@@ -92,7 +129,7 @@ public:
     skel.id = next_marker_id_++;
     skel.type = visualization_msgs::msg::Marker::LINE_LIST;
     skel.action = visualization_msgs::msg::Marker::ADD;
-    skel.scale.x = 0.02;  // line thickness
+    skel.scale.x = 0.02; // line thickness
     skel.color.a = 1.0;
     skel.color.r = 0.0;
     skel.color.g = 1.0;
@@ -135,10 +172,22 @@ public:
 
     cloud_msg.fields.clear();
     cloud_msg.fields.resize(4);
-    cloud_msg.fields[0].name = "x"; cloud_msg.fields[0].offset = 0; cloud_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32; cloud_msg.fields[0].count = 1;
-    cloud_msg.fields[1].name = "y"; cloud_msg.fields[1].offset = 4; cloud_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32; cloud_msg.fields[1].count = 1;
-    cloud_msg.fields[2].name = "z"; cloud_msg.fields[2].offset = 8; cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32; cloud_msg.fields[2].count = 1;
-    cloud_msg.fields[3].name = "rgb"; cloud_msg.fields[3].offset = 12; cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32; cloud_msg.fields[3].count = 1;
+    cloud_msg.fields[0].name = "x";
+    cloud_msg.fields[0].offset = 0;
+    cloud_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    cloud_msg.fields[0].count = 1;
+    cloud_msg.fields[1].name = "y";
+    cloud_msg.fields[1].offset = 4;
+    cloud_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    cloud_msg.fields[1].count = 1;
+    cloud_msg.fields[2].name = "z";
+    cloud_msg.fields[2].offset = 8;
+    cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    cloud_msg.fields[2].count = 1;
+    cloud_msg.fields[3].name = "rgb";
+    cloud_msg.fields[3].offset = 12;
+    cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    cloud_msg.fields[3].count = 1;
 
     sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
     sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
@@ -148,7 +197,8 @@ public:
     auto points_acc = points_cpu.accessor<double, 2>();
     auto colors_acc = colors_cpu.accessor<double, 2>();
 
-    for (int64_t i = 0; i < num_points; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_rgb) {
+    for (int64_t i = 0; i < num_points;
+         ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_rgb) {
       *iter_x = static_cast<float>(points_acc[i][0]);
       *iter_y = static_cast<float>(points_acc[i][1]);
       *iter_z = static_cast<float>(points_acc[i][2]);
@@ -187,7 +237,8 @@ public:
 
 private:
   rclcpp::Node::SharedPtr node_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+      marker_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
   visualization_msgs::msg::MarkerArray markers_;
   std::string frame_id_;

@@ -76,14 +76,10 @@ private:
       global_orient_.index_put_({0, i},
                                 static_cast<double>(msg->global_orient[i]));
     }
-    RCLCPP_INFO(this->get_logger(), "Global orient: [%f, %f, %f]",
-                global_orient_.index({0, 0}).item<double>(),
-                global_orient_.index({0, 1}).item<double>(),
-                global_orient_.index({0, 2}).item<double>());
-    RCLCPP_INFO(this->get_logger(), "Transl orient: [%f, %f, %f]",
-                transl_.index({0, 0}).item<double>(),
-                transl_.index({0, 1}).item<double>(),
-                transl_.index({0, 2}).item<double>());
+    // Copy betas
+    for (int i = 0; i < smpl_->num_betas(); ++i) {
+      betas_.index_put_({0, i}, static_cast<double>(msg->betas[i]));
+    }
     // --- 1) SMPL output using the parameters directly ---
     auto output = smpl_->forward(smplx::body_pose(body_pose_),
                                  smplx::global_orient(global_orient_),
@@ -121,6 +117,9 @@ private:
     keypoints = torch::matmul(keypoints, SMPL_TO_ROS_);
     vis_->add_keypoints(keypoints);
     vis_->add_skeleton(keypoints);
+    auto start = keypoints.index({0, Slice()});
+    torch::Tensor end = torch::zeros({3}, torch::kFloat64).to(device_);
+    vis_->add_arrow(start, end);
 
     vis_->update_visualization();
   }

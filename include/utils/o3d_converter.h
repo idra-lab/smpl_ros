@@ -7,13 +7,13 @@
 
 #include <memory>
 
-std::tuple<torch::Tensor, torch::Tensor> open3d_mesh_to_tensor(
-    const open3d::geometry::TriangleMesh &mesh) {
+std::tuple<torch::Tensor, torch::Tensor>
+open3d_mesh_to_tensor(const open3d::geometry::TriangleMesh &mesh) {
   // Convert Open3D mesh to PyTorch tensors
-  torch::Tensor vertices =
-      torch::empty({static_cast<int64_t>(mesh.vertices_.size()), 3}, torch::kFloat64);
-  torch::Tensor faces =
-      torch::empty({static_cast<int64_t>(mesh.triangles_.size()), 3}, torch::kInt64);
+  torch::Tensor vertices = torch::empty(
+      {static_cast<int64_t>(mesh.vertices_.size()), 3}, torch::kFloat64);
+  torch::Tensor faces = torch::empty(
+      {static_cast<int64_t>(mesh.triangles_.size()), 3}, torch::kInt64);
 
   for (size_t i = 0; i < mesh.vertices_.size(); ++i) {
     const auto &v = mesh.vertices_[i];
@@ -27,13 +27,13 @@ std::tuple<torch::Tensor, torch::Tensor> open3d_mesh_to_tensor(
 
   return {vertices, faces};
 }
-std::tuple<torch::Tensor, torch::Tensor> open3d_pointcloud_to_tensor(
-    const open3d::geometry::PointCloud &cloud) {
+std::tuple<torch::Tensor, torch::Tensor>
+open3d_pointcloud_to_tensor(const open3d::geometry::PointCloud &cloud) {
   // Convert Open3D point cloud with colors to PyTorch tensors
-  torch::Tensor points =
-      torch::empty({static_cast<int64_t>(cloud.points_.size()), 3}, torch::kFloat64);
-  torch::Tensor colors =
-      torch::empty({static_cast<int64_t>(cloud.colors_.size()), 3}, torch::kFloat64);
+  torch::Tensor points = torch::empty(
+      {static_cast<int64_t>(cloud.points_.size()), 3}, torch::kFloat64);
+  torch::Tensor colors = torch::empty(
+      {static_cast<int64_t>(cloud.colors_.size()), 3}, torch::kFloat64);
 
   for (size_t i = 0; i < cloud.points_.size(); ++i) {
     const auto &p = cloud.points_[i];
@@ -47,8 +47,9 @@ std::tuple<torch::Tensor, torch::Tensor> open3d_pointcloud_to_tensor(
   return {points, colors};
 }
 
-std::shared_ptr<open3d::geometry::TriangleMesh> tensor_to_open3d_mesh(
-    const torch::Tensor &vertices, const torch::Tensor &faces) {
+std::shared_ptr<open3d::geometry::TriangleMesh>
+tensor_to_open3d_mesh(const torch::Tensor &vertices,
+                      const torch::Tensor &faces) {
   auto mesh = std::make_shared<open3d::geometry::TriangleMesh>();
   auto verts = vertices.squeeze(0).to(torch::kCPU).contiguous();
   auto tris = faces.to(torch::kCPU).contiguous();
@@ -68,8 +69,8 @@ std::shared_ptr<open3d::geometry::TriangleMesh> tensor_to_open3d_mesh(
   mesh->ComputeVertexNormals();
   return mesh;
 }
-std::shared_ptr<open3d::geometry::PointCloud> tensor_to_open3d_pointcloud(
-    const torch::Tensor &vertices) {
+std::shared_ptr<open3d::geometry::PointCloud>
+tensor_to_open3d_pointcloud(const torch::Tensor &vertices) {
   auto cloud = std::make_shared<open3d::geometry::PointCloud>();
   auto verts = vertices.squeeze(0).to(torch::kCPU).contiguous();
 
@@ -83,26 +84,4 @@ std::shared_ptr<open3d::geometry::PointCloud> tensor_to_open3d_pointcloud(
   return cloud;
 }
 
-void save_obj(const std::string &filename, const torch::Tensor &vertices,
-              const torch::Tensor &faces) {
-  std::ofstream obj_file(filename);
-  if (!obj_file.is_open()) {
-    throw std::runtime_error("Could not open OBJ file for writing.");
-  }
-  obj_file << std::fixed << std::setprecision(8);
-
-  for (int64_t i = 0; i < vertices.size(0); ++i) {
-    auto v = vertices[i];
-    obj_file << "v " << v[0].item<float>() << " " << v[1].item<float>() << " "
-             << v[2].item<float>() << "\n";
-  }
-
-  for (int64_t i = 0; i < faces.size(0); ++i) {
-    auto f = faces[i];
-    obj_file << "f " << f[0].item<int64_t>() + 1 << " "
-             << f[1].item<int64_t>() + 1 << " " << f[2].item<int64_t>() + 1
-             << "\n";
-  }
-}
-
-#endif  // O3D_CONVERTER_H
+#endif // O3D_CONVERTER_H

@@ -49,7 +49,7 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
       sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
   body_tracking_parameters.body_format = sl::BODY_FORMAT::BODY_38;
   body_tracking_parameters.enable_body_fitting = true;
-  body_tracking_parameters.enable_tracking = false;
+  body_tracking_parameters.enable_tracking = true;
   state = zed.enableBodyTracking(body_tracking_parameters);
   if (state != sl::ERROR_CODE::SUCCESS) {
     std::cout << "Error: " << state << std::endl;

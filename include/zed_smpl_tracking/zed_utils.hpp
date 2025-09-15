@@ -116,19 +116,10 @@ std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
     // --- Root pose ---
     body.root_position = Eigen::Vector3d(
         zed_body.keypoint[0].x, zed_body.keypoint[0].y, zed_body.keypoint[0].z);
-    auto q = zed_body.global_root_orientation;
-    body.global_orientation.w() = q.w;
-    body.global_orientation.x() = q.x;
-    body.global_orientation.y() = q.y;
-    body.global_orientation.z() = q.z;
+    body.global_orientation = Eigen::Quaterniond(
+        zed_body.global_root_orientation.w, zed_body.global_root_orientation.x,
+        zed_body.global_root_orientation.y, zed_body.global_root_orientation.z);
     body.global_orientation.normalize();
-    RCLCPP_INFO_STREAM(
-        rclcpp::get_logger("zed_smpl_tracking"),
-        "Body " << i << " root pos: " << body.root_position.transpose()
-                << " orient: " << zed_body.global_root_orientation.w << ","
-                << zed_body.global_root_orientation.x << ","
-                << zed_body.global_root_orientation.y << ","
-                << zed_body.global_root_orientation.z);
     // --- Local orientations ---
     for (int j = 1; j < 24; ++j) {
       auto it = SMPL_TO_ZED.find(j);
@@ -166,8 +157,8 @@ buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros) {
   Eigen::Matrix4d T_root = Eigen::Matrix4d::Identity();
   T_root.block<3, 3>(0, 0) = body.global_orientation.toRotationMatrix();
   T_root.block<3, 1>(0, 3) = body.root_position;
-  RCLCPP_INFO_STREAM(rclcpp::get_logger("zed_smpl_tracking"),
-                     "Root: " << T_root);
+  // RCLCPP_INFO_STREAM(rclcpp::get_logger("zed_smpl_tracking"),
+  //                    "Root: " << T_root);
 
   // change of basis to convert SMPL world to ROS world
   Eigen::Matrix4d T_root_smpl =
@@ -186,7 +177,7 @@ buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros) {
 
   // --- Local joints ---
   for (int j = 1; j < 24; ++j) {
-    Eigen::Quaterniond q_local_ros = body.local_orient.at(j);
+    Eigen::Quaterniond q_local_ros = body.local_orient.at(j).normalized();
     Eigen::Matrix3d R_local_smpl =
         R_change * q_local_ros.toRotationMatrix() * R_change.inverse();
     Eigen::Vector3d rvec_local_smpl =
@@ -214,7 +205,17 @@ buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros) {
     msg.keypoints[j * 3 + 1] = kp_smpl.y();
     msg.keypoints[j * 3 + 2] = kp_smpl.z();
   }
-
+  // TODO: understand how to manage betas
+  msg.betas[0] = -0.032912730650367795;
+  msg.betas[1] = -0.3093146696069616;
+  msg.betas[2] = 0.11910241759076286;
+  msg.betas[3] = -0.058940980811864836;
+  msg.betas[4] = 0.11533209893835653;
+  msg.betas[5] = 3.773450061006547;
+  msg.betas[6] = 1.3071629623822734;
+  msg.betas[7] = -1.0421925796496223;
+  msg.betas[8] = 0.05235821253927235;
+  msg.betas[9] = -2.961921780345053;
   return msg;
 }
 
@@ -280,6 +281,38 @@ static void broadcastStaticCameras(
     tf_broadcaster->sendTransform(t);
   }
 }
+void save_ply(const std::string &filename,
+              std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> pc) {
+  std::ofstream obj_file(filename);
+  if (!obj_file.is_open()) {
+    throw std::runtime_error("Could not open PLY file for writing.");
+  }
+  obj_file << "ply\n";
+  obj_file << "format ascii 1.0\n";
+  obj_file << "element vertex " << pc.size() << "\n";
+  obj_file << "property float x\n";
+  obj_file << "property float y\n";
+  obj_file << "property float z\n";
+  obj_file << "property uchar red\n";
+  obj_file << "property uchar green\n";
+  obj_file << "property uchar blue\n";
+  obj_file << "end_header\n";
+  for (const auto &p : pc) {
+    const Eigen::Vector3d &pt = p.first;
+    const Eigen::Vector3d &col = p.second;
+    uint8_t r =
+        static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.x())) * 255.0);
+    uint8_t g =
+        static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.y())) * 255.0);
+    uint8_t b =
+        static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.z())) * 255.0);
+    obj_file << pt.x() << " " << pt.y() << " " << pt.z() << " " << (int)r
+             << " " << (int)g << " " << (int)b << "\n";
+  }
+  obj_file.close();
+  std::cout << "Saved " << pc.size() << " points to " << filename << std::endl;
+}
+
 void publishMergedPointCloud(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
     const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
@@ -347,3 +380,4 @@ void publishMergedPointCloud(
 
   pub->publish(cloud_msg);
 }
+

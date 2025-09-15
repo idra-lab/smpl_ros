@@ -14,7 +14,6 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
-#include "zed_smpl_tracking/GLViewer.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
 #include "zed_smpl_tracking/zed_utils.hpp"
 
@@ -90,9 +89,6 @@ int main(int argc, char **argv) {
     }
   }
 
-  GLViewer viewer;
-  viewer.init(argc, argv);
-
   for (auto &client : clients)
     client.start();
 
@@ -160,8 +156,13 @@ int main(int argc, char **argv) {
     yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
   }
 
+  std::vector<sl::Bodies> detected_bodies;
+  detected_bodies.resize(cameras.size());
+
+  auto time_now = std::chrono::high_resolution_clock::now();
+  bool already_saved = false;
   // ------------------ Main loop ------------------
-  while (rclcpp::ok() && viewer.isAvailable()) {
+  while (rclcpp::ok()) {
     trigger.notifyZED();
 
     std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>> pcs(
@@ -173,54 +174,72 @@ int main(int argc, char **argv) {
       }
       auto merged_cloud = mergePointClouds(pcs);
       publishMergedPointCloud(cloud_pub, merged_cloud, "map");
+      // dump point cloud after 5 seconds
+      if (!already_saved) {
+        auto time_after = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                            time_after - time_now)
+                            .count();
+        if (duration > 5.0) {
+          std::string pc_filename = "human_cloud.ply";
+          save_ply(pc_filename, merged_cloud);
+          already_saved = true;
+          RCLCPP_INFO(node->get_logger(), "Saved point cloud to %s",
+                      pc_filename.c_str());
+        }
+      }
     }
-
-    // SMPL processing
-    // if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS) {
-    //   RCLCPP_WARN(node->get_logger(), "Could not process fusion step");
-    //   continue;
-    // }
-
-    // This produces a wrong result even though singular cameras have correct
-    // bodies
-    // if (fusion.retrieveBodies(fused_bodies, body_tracking_runtime_parameters)
-    // !=
-    //     sl::FUSION_ERROR_CODE::SUCCESS) {
-    //   RCLCPP_WARN(node->get_logger(), "Could not retrieve bodies");
-    //   continue;
-    // }
-    // if (fused_bodies.body_list.empty()) {
-    //   RCLCPP_WARN(node->get_logger(), "No bodies found");
-    //   continue;
-    // }
-    // Prepare per-camera BodyData vector
-    for (size_t i = 0; i < cameras.size(); i++) {
-      sl::Bodies detected_bodies;
-      clients[i].zed.retrieveBodies(detected_bodies);
-      if (detected_bodies.body_list.empty()) {
+    Body fusedBody;
+    bool useFusionAPI = false;
+    if (useFusionAPI) {
+      // This produces a wrong result even though singular cameras have correct
+      // bodies
+      if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS) {
+        RCLCPP_WARN(node->get_logger(), "Fusion process failed");
         continue;
       }
-      // extract only the first body (TODO: get most centered?)
-      raw_bodies_vector.push_back(detected_bodies.body_list[0]);
-      RCLCPP_INFO(node->get_logger(), "Body rot %f %f %f %f",
-                  detected_bodies.body_list[0].global_root_orientation.w,
-                  detected_bodies.body_list[0].global_root_orientation.x,
-                  detected_bodies.body_list[0].global_root_orientation.y,
-                  detected_bodies.body_list[0].global_root_orientation.z);
+      if (fusion.retrieveBodies(fused_bodies,
+                                body_tracking_runtime_parameters) !=
+          sl::FUSION_ERROR_CODE::SUCCESS) {
+        RCLCPP_WARN(node->get_logger(), "Could not retrieve bodies");
+        continue;
+      }
+      if (fused_bodies.body_list.empty()) {
+        RCLCPP_WARN(node->get_logger(), "No bodies found");
+        continue;
+      }
+      raw_bodies_vector.push_back(fused_bodies.body_list[0]);
+      std::vector<Body> bodies =
+          extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
+      // bodies are already merged by the Fusion API
+      if (!raw_bodies_vector.empty()) {
+        fusedBody = bodies[0];
+      }
+    } else {
 
+      // Prepare per-camera BodyData vector
+      for (size_t i = 0; i < cameras.size(); i++) {
+
+        clients[i].zed.retrieveBodies(detected_bodies[i]);
+        if (detected_bodies[i].body_list.empty()) {
+          continue;
+        }
+        // extract only the first body (TODO: get most centered?)
+        raw_bodies_vector.push_back(detected_bodies[i].body_list[0]);
+      }
+      // Extract vector of Body converting from sl::Bodies to custom Body struct
+      std::vector<Body> bodies =
+          extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
+      // Merge the bodies into a single fused BodyData
+      if (!raw_bodies_vector.empty()) {
+        fusedBody = mergeBodiesWithExtrinsics(bodies, T_cams_extrinsics);
+      }
     }
-    // Extract vector of Body converting from sl::Bodies to custom Body struct
-    std::vector<Body> bodies = extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
+    raw_bodies_vector.clear();
 
-    // Merge the bodies into a single fused BodyData
-    if (!raw_bodies_vector.empty()) {
-      Body fusedBody = mergeBodiesWithExtrinsics(bodies, T_cams_extrinsics);
-
-      // Build and publish SMPL message
-      auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS);
-      smpl_pub->publish(msg);
-      raw_bodies_vector.clear();
-    }
+    // Build and publish SMPL message
+    auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS);
+    smpl_pub->publish(msg);
   }
 
   // ------------------ Shutdown ------------------

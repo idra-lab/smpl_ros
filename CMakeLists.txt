@@ -37,7 +37,7 @@ set(ZED_LIBS ${ZED_LIBRARIES} ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY})
 add_library(yolov8 src/zed_smpl_tracking/yolov8/yolov8_seg.cpp src/zed_smpl_tracking/yolov8/yolov8_utils.cpp)
 target_include_directories(yolov8 PUBLIC include/zed_smpl_tracking/yolov8 ${CUDA_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(yolov8 ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY}
-  ${OpenCV_LIBRARIES} ${Open3D_LIBRARIES})
+  ${OpenCV_LIBRARIES})
 
 # Executable
 add_executable(fitting_smpl src/body_fitting/fitting_smpl_ros.cpp)
@@ -45,7 +45,6 @@ add_executable(smpl_ros_viewer src/smpl_ros_viewer/smpl_ros_viewer.cpp)
 add_executable(zed_smpl_tracking
   src/zed_smpl_tracking/zed_smpl_tracking.cpp
   src/zed_smpl_tracking/ClientPublisher.cpp
-  src/zed_smpl_tracking/GLViewer.cpp
 )
 
 # Fitting SMPL
