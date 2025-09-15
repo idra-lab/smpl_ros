@@ -66,10 +66,10 @@ private:
       body_pose_.index_put_({0, i}, static_cast<double>(msg->body_pose[i]));
     }
 
-    // Copy translation
-    for (int i = 0; i < 3; ++i) {
-      transl_.index_put_({0, i}, static_cast<double>(msg->transl[i]));
-    }
+    // No Copy translation -> apply offset between pelvis instead
+    // for (int i = 0; i < 3; ++i) {
+    //   transl_.index_put_({0, i}, static_cast<double>(msg->transl[i]));
+    // }
 
     // Copy global orientation
     for (int i = 0; i < 3; ++i) {
@@ -87,8 +87,25 @@ private:
                                  smplx::return_verts(true));
     auto smpl_vertices = output.vertices.value().squeeze(0); // (6890, 3)
 
+    auto joints = output.joints.value().squeeze(0); // (24, 3)
+    // retrieve pelvis (joint 0)
+    auto pelvis = joints.index({0, Slice()}); // (3,)
+
+    // RCLCPP_INFO_STREAM(this->get_logger(),
+    //                    "Pelvis SMPL: " << pelvis
+    //                                    << " | msg pelvis: " << msg->keypoints[0]
+    //                                    << ", " << msg->keypoints[1] << ", "
+    //                                    << msg->keypoints[2]);
+    // Compute offset between SMPL pelvis and skeleton tracker pelvis
+    auto offset = torch::zeros({3}, torch::kFloat64).to(device_);
+    offset.index_put_({0}, static_cast<double>(msg->keypoints[0]) - pelvis[0].item<double>());
+    offset.index_put_({1}, static_cast<double>(msg->keypoints[1]) - pelvis[1].item<double>());
+    offset.index_put_({2}, static_cast<double>(msg->keypoints[2]) - pelvis[2].item<double>());
+    // Apply offset to translation
+    smpl_vertices += offset;
+
     // --- Transform to ROS axes ---
-    smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_); 
+    smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_);
 
     // --- Update RViz ---
     vis_->add_mesh(smpl_vertices.unsqueeze(0), faces_);
