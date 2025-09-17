@@ -32,6 +32,11 @@ def generate_launch_description():
         default_value='path/to/point_cloud.ply',
         description='Path to the point cloud file (.ply)'
     )
+    smpl_params_output_file_arg = DeclareLaunchArgument(
+        'smpl_params_output_file',
+        default_value='smpl_params.json',
+        description='Output file for SMPL parameters'
+    )
 
     # Node configuration
     fitting_smpl_node = Node(
@@ -42,7 +47,8 @@ def generate_launch_description():
         parameters=[{
             'model_path': LaunchConfiguration('model_path'),
             'config_path': LaunchConfiguration('config_path'),
-            'point_cloud_path': LaunchConfiguration('point_cloud_path')
+            'point_cloud_path': LaunchConfiguration('point_cloud_path'),
+            'smpl_params_output_file': LaunchConfiguration('smpl_params_output_file')
         }]
     )
     delayed_fitting_smpl_node = TimerAction(
@@ -56,5 +62,6 @@ def generate_launch_description():
         model_path_arg,
         config_path_arg,
         point_cloud_path_arg,
+        smpl_params_output_file_arg,
         delayed_fitting_smpl_node,
     ])

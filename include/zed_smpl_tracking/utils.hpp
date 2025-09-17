@@ -12,7 +12,7 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <thread>
 #include <vector>
-
+#define NUM_BETAS 10
 // SMPL to ROS homogenous transformation of coordinates
 inline Eigen::Matrix4d smpl_to_ros_transform() {
   Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
@@ -59,7 +59,48 @@ static const int SMPL_PARENTS[24] = {
     20, // 22
     21  // 23
 };
+// load json with betas
 
+std::vector<double> load_smpl_betas(const std::string &smpl_params_path) {
+  std::ifstream smpl_file(smpl_params_path);
+  if (!smpl_file.is_open()) {
+    RCLCPP_FATAL(rclcpp::get_logger("zed_smpl_tracking"),
+                 "Could not open smpl params file %s",
+                 smpl_params_path.c_str());
+    throw std::runtime_error("Failed to open SMPL params file");
+  }
+
+  nlohmann::json smpl_json;
+  smpl_file >> smpl_json;
+
+  std::vector<double> betas;
+  if (smpl_json.contains("betas") && smpl_json["betas"].is_array()) {
+    auto betas_json = smpl_json["betas"];
+    if (betas_json.size() != NUM_BETAS) {
+      RCLCPP_FATAL(rclcpp::get_logger("zed_smpl_tracking"),
+                   "SMPL betas array must contain %d values", NUM_BETAS);
+      throw std::runtime_error("Invalid betas size in SMPL params");
+    }
+    betas.reserve(NUM_BETAS);
+    for (size_t i = 0; i < NUM_BETAS; i++) {
+      betas.push_back(static_cast<double>(betas_json[i]));
+    }
+  } else {
+    RCLCPP_FATAL(rclcpp::get_logger("zed_smpl_tracking"),
+                 "SMPL params missing 'betas' array");
+    throw std::runtime_error("Missing betas in SMPL params");
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("zed_smpl_tracking"),
+              "Loaded SMPL params from %s", smpl_params_path.c_str());
+  std::string betas_str;
+  for (const auto &b : betas) {
+    betas_str += std::to_string(b) + " ";
+  }
+  RCLCPP_INFO(rclcpp::get_logger("zed_smpl_tracking"), "Betas: %s",
+              betas_str.c_str());
+  return betas;
+}
 // Converts quaternion to rotation vector (axis-angle)
 // The output rotation vector is in the range [-pi, pi]
 static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
@@ -149,7 +190,8 @@ std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
 
 // ---- Build SMPL message from ZED fused body and apply transforms ----
 inline smpl_msgs::msg::Smpl
-buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros) {
+buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros,
+                 const std::vector<double> &betas) {
   smpl_msgs::msg::Smpl msg;
   Eigen::Matrix3d R_change = T_smpl_to_ros.block<3, 3>(0, 0);
 
@@ -205,17 +247,11 @@ buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros) {
     msg.keypoints[j * 3 + 1] = kp_smpl.y();
     msg.keypoints[j * 3 + 2] = kp_smpl.z();
   }
-  // TODO: understand how to manage betas
-  msg.betas[0] = -0.032912730650367795;
-  msg.betas[1] = -0.3093146696069616;
-  msg.betas[2] = 0.11910241759076286;
-  msg.betas[3] = -0.058940980811864836;
-  msg.betas[4] = 0.11533209893835653;
-  msg.betas[5] = 3.773450061006547;
-  msg.betas[6] = 1.3071629623822734;
-  msg.betas[7] = -1.0421925796496223;
-  msg.betas[8] = 0.05235821253927235;
-  msg.betas[9] = -2.961921780345053;
+  for (size_t i = 0; i < NUM_BETAS; i++) {
+    msg.betas[i] = betas[i];
+  }
+  msg.header.stamp = rclcpp::Clock().now();
+  msg.header.frame_id = "map";
   return msg;
 }
 
@@ -306,8 +342,8 @@ void save_ply(const std::string &filename,
         static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.y())) * 255.0);
     uint8_t b =
         static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.z())) * 255.0);
-    obj_file << pt.x() << " " << pt.y() << " " << pt.z() << " " << (int)r
-             << " " << (int)g << " " << (int)b << "\n";
+    obj_file << pt.x() << " " << pt.y() << " " << pt.z() << " " << (int)r << " "
+             << (int)g << " " << (int)b << "\n";
   }
   obj_file.close();
   std::cout << "Saved " << pc.size() << " points to " << filename << std::endl;
@@ -380,4 +416,3 @@ void publishMergedPointCloud(
 
   pub->publish(cloud_msg);
 }
-

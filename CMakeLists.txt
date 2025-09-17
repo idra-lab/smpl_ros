@@ -97,6 +97,7 @@ ament_target_dependencies(smpl_ros_viewer
   rclcpp
   visualization_msgs
   smpl_msgs
+  geometry_msgs
 )
 ament_target_dependencies(zed_smpl_tracking
   rclcpp

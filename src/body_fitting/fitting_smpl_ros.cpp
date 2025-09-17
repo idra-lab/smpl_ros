@@ -33,6 +33,7 @@ public:
     this->declare_parameter<std::string>("model_path", "");
     this->declare_parameter<std::string>("config_path", "");
     this->declare_parameter<std::string>("point_cloud_path", "");
+    this->declare_parameter<std::string>("smpl_params_output_file", "smpl_optimized.json");
   }
 
   /// Initialize the node: load model, config, point cloud, and setup
@@ -47,7 +48,6 @@ public:
 
   /// Run the full optimization pipeline
   void run_optimization() {
-    dump_parameters_json(); // dump initial parameters
     RCLCPP_INFO(this->get_logger(), "Starting optimization...");
 
     // Optimize translation
@@ -69,7 +69,7 @@ public:
     optimize({betas_}, config_["shape"]["lr"], config_["shape"]["it"], "Shape");
 
     // Dump final parameters to JSON
-    dump_parameters_json();
+    dump_parameters_json(smpl_params_output_file_);
 
     RCLCPP_INFO(this->get_logger(), "Optimization complete.");
     rclcpp::shutdown();
@@ -82,6 +82,7 @@ private:
     model_path_ = this->get_parameter("model_path").as_string();
     config_path_ = this->get_parameter("config_path").as_string();
     point_cloud_path_ = this->get_parameter("point_cloud_path").as_string();
+    smpl_params_output_file_ = this->get_parameter("smpl_params_output_file").as_string();
 
     if (!std::filesystem::exists(model_path_) ||
         !std::filesystem::exists(config_path_) ||
@@ -113,7 +114,7 @@ private:
       throw std::runtime_error("Failed to load target point cloud");
     }
 
-    cloud_ptr = cloud_ptr->VoxelDownSample(0.02);
+    cloud_ptr = cloud_ptr->VoxelDownSample(0.01);
     auto [vertices, colors] = open3d_pointcloud_to_tensor(*cloud_ptr);
 
     vertices_target_ = vertices.to(device_).unsqueeze(0); // (1, N, 3)
@@ -239,7 +240,7 @@ private:
   }
 
   // -------------------- Dump final parameters --------------------
-  void dump_parameters_json() {
+  void dump_parameters_json(std::string filename = "optimized_params.json") {
     auto torch_to_std_vector = [](const torch::Tensor &tensor) {
       std::vector<double> vec(tensor.numel());
       for(int i=0; i<tensor[0].numel(); i++) {
@@ -266,10 +267,10 @@ private:
     j["global_orient"] = torch_to_std_vector(global_orient_);
     j["transl"] = torch_to_std_vector(transl_);
 
-    std::ofstream out("optimized_params.json");
+    std::ofstream out(filename);
     out << std::setw(4) << j << std::endl;
     RCLCPP_INFO(this->get_logger(),
-                "Dumped optimized parameters to optimized_params.json");
+                "Dumped optimized parameters to %s", filename.c_str());
     out.close();
   }
 
@@ -282,6 +283,7 @@ private:
   ChamferDistance chamfer_;
   nlohmann::json config_;
   std::shared_ptr<SMPLRviz> vis_;
+  std::string smpl_params_output_file_;
 
   std::string model_path_, config_path_, point_cloud_path_;
 };

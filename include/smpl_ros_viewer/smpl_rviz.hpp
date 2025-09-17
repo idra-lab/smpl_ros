@@ -6,6 +6,7 @@
 #include <torch/torch.h>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <geometry_msgs/msg/pose_array.hpp>
 
 static const int SMPL_PARENTS[24] = {-1, 0,  0,  0,  1,  2,  3,  4,
                                      5,  6,  7,  8,  9,  9,  9,  12,
@@ -31,9 +32,9 @@ public:
     mesh.action = visualization_msgs::msg::Marker::ADD;
     mesh.scale.x = mesh.scale.y = mesh.scale.z = 1.0;
     mesh.color.a = 1.0;
-    mesh.color.r = 0.6;
-    mesh.color.g = 0.6;
-    mesh.color.b = 0.8;
+    mesh.color.r = 1.0;
+    mesh.color.g = 0.5;
+    mesh.color.b = 0.0;
 
     auto verts = vertices.squeeze(0).to(torch::kCPU).contiguous();
     auto verts_acc = verts.accessor<double, 2>();

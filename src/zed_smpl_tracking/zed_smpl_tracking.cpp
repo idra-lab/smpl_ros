@@ -12,10 +12,11 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "tf2_ros/static_transform_broadcaster.h"
+#include "utils/json.hpp"
 #include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
-#include "zed_smpl_tracking/zed_utils.hpp"
+#include "zed_smpl_tracking/utils.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -29,18 +30,37 @@ int main(int argc, char **argv) {
                                        "/home/nardi/smpl_ros/yolov8x-seg.onnx");
   auto tf_static_broadcaster_ =
       std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
-
+  // used only with fusion API
   node->declare_parameter<int>("max_width", 1280);
   node->declare_parameter<int>("max_height", 720);
   node->declare_parameter<bool>("publish_point_cloud", true);
+  node->declare_parameter<std::string>("point_cloud_output_file", "human_cloud.ply");
+  node->declare_parameter<std::string>("smpl_params_file", "");
 
   std::string calib_file = node->get_parameter("calibration_file").as_string();
+  RCLCPP_INFO(node->get_logger(), "Using calibration file: %s",
+              calib_file.c_str());
   std::string yolo_model_path =
       node->get_parameter("yolo_model_path").as_string();
+  RCLCPP_INFO(node->get_logger(), "Using YOLO model file: %s",
+              yolo_model_path.c_str());
   int max_width = node->get_parameter("max_width").as_int();
   int max_height = node->get_parameter("max_height").as_int();
   bool publish_point_cloud =
       node->get_parameter("publish_point_cloud").as_bool();
+  std::string smpl_params_path =
+      node->get_parameter("smpl_params_file").as_string();
+  std::vector<double> betas(10, 0.0);
+  if (smpl_params_path == "") {
+    RCLCPP_INFO(node->get_logger(),
+                "No .json params file specified: SMPL betas set to zero");
+  } else {
+    betas = load_smpl_betas(smpl_params_path);
+  }
+  std::string pc_output_file =
+      node->get_parameter("point_cloud_output_file").as_string();
+  RCLCPP_INFO(node->get_logger(), "Point cloud will be saved to: %s",
+              pc_output_file.c_str());
 
   auto smpl_pub =
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
@@ -181,19 +201,19 @@ int main(int argc, char **argv) {
                             time_after - time_now)
                             .count();
         if (duration > 5.0) {
-          std::string pc_filename = "human_cloud.ply";
-          save_ply(pc_filename, merged_cloud);
+          // create folder named as time
+          save_ply(pc_output_file, merged_cloud);
           already_saved = true;
           RCLCPP_INFO(node->get_logger(), "Saved point cloud to %s",
-                      pc_filename.c_str());
+                      pc_output_file.c_str());
         }
       }
     }
     Body fusedBody;
     bool useFusionAPI = false;
     if (useFusionAPI) {
-      // This produces a wrong result even though singular cameras have correct
-      // bodies
+      // This produces a wrong result even though singular cameras have
+      // correct bodies
       if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS) {
         RCLCPP_WARN(node->get_logger(), "Fusion process failed");
         continue;
@@ -227,7 +247,11 @@ int main(int argc, char **argv) {
         // extract only the first body (TODO: get most centered?)
         raw_bodies_vector.push_back(detected_bodies[i].body_list[0]);
       }
-      // Extract vector of Body converting from sl::Bodies to custom Body struct
+      if (raw_bodies_vector.empty()) {
+        continue;
+      }
+      // Extract vector of Body converting from sl::Bodies to custom Body
+      // struct
       std::vector<Body> bodies =
           extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
       // Merge the bodies into a single fused BodyData
@@ -238,7 +262,7 @@ int main(int argc, char **argv) {
     raw_bodies_vector.clear();
 
     // Build and publish SMPL message
-    auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS);
+    auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
     smpl_pub->publish(msg);
   }
 
