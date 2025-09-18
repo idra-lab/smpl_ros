@@ -112,7 +112,7 @@ private:
 
     // extract keypoints and publish as PoseArray
     geometry_msgs::msg::PoseArray keypoints_msg;
-    keypoints_msg.header.stamp = this->get_clock()->now();
+    keypoints_msg.header.stamp = msg->header.stamp;
     keypoints_msg.header.frame_id = "map";
     for (int i = 0; i < 24; ++i) {
       geometry_msgs::msg::Pose pose;
