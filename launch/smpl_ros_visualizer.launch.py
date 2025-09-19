@@ -26,6 +26,11 @@ def generate_launch_description():
         default_value='path/to/SMPL_model.npz',
         description='Path to the SMPL model file (.npz)'
     )
+    frame_id_arg = DeclareLaunchArgument(
+        'frame_id',
+        default_value='map',
+        description='Frame ID for the SMPL model'
+    )
 
 
     # Node configuration
@@ -36,6 +41,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'model_path': LaunchConfiguration('model_path'),
+            'frame_id': LaunchConfiguration('frame_id')
         }]
     )
 
@@ -43,5 +49,6 @@ def generate_launch_description():
         static_tf_broadcaster_node,
         rviz_node,
         model_path_arg,
+        frame_id_arg,
         smpl_ros_viewer_node,
     ])

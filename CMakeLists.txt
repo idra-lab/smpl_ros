@@ -22,6 +22,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(smpl_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
 # ZED SMPL Tracking
 find_package(ZED REQUIRED)
 find_package(CUDA REQUIRED)
@@ -104,6 +105,7 @@ ament_target_dependencies(zed_smpl_tracking
   smpl_msgs
   sensor_msgs
   tf2_ros
+  cv_bridge
 )
 
 # Install

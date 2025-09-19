@@ -316,6 +316,23 @@ static void broadcastStaticCameras(
     // send immediately
     tf_broadcaster->sendTransform(t);
   }
+
+  // also create a cam0_sn_image frame for robot calibration
+  geometry_msgs::msg::TransformStamped t;
+  t.header.stamp = rclcpp::Clock().now();
+  t.header.frame_id = parent_frame + "_image";
+  t.child_frame_id = parent_frame;
+  // use ros_to_image_transform
+  Eigen::Matrix4d T_image = ros_to_image_transform().inverse();
+  t.transform.translation.x = T_image(0, 3);
+  t.transform.translation.y = T_image(1, 3);
+  t.transform.translation.z = T_image(2, 3);
+  Eigen::Quaterniond q_image(T_image.block<3, 3>(0, 0));
+  t.transform.rotation.x = q_image.x();
+  t.transform.rotation.y = q_image.y();
+  t.transform.rotation.z = q_image.z();
+  t.transform.rotation.w = q_image.w();
+  tf_broadcaster->sendTransform(t);
 }
 void save_ply(const std::string &filename,
               std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> pc) {

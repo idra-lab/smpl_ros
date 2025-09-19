@@ -17,6 +17,23 @@
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
 #include "zed_smpl_tracking/utils.hpp"
+#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+
+void publish_image_msg(
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub,
+    const cv::Mat &image, const std::string &frame_id) {
+  std_msgs::msg::Header header;
+  header.stamp = rclcpp::Clock().now();
+  header.frame_id = frame_id;
+  // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Publishing image with %d
+  // channels",
+  //             image.channels());
+  // cv::cvtColor(image, image, cv::COLOR_BGRA2RGBA);
+  auto image_msg = cv_bridge::CvImage(header, "bgr8", image).toImageMsg();
+  image_pub->publish(*image_msg);
+}
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -34,7 +51,9 @@ int main(int argc, char **argv) {
   node->declare_parameter<int>("max_width", 1280);
   node->declare_parameter<int>("max_height", 720);
   node->declare_parameter<bool>("publish_point_cloud", true);
-  node->declare_parameter<std::string>("point_cloud_output_file", "human_cloud.ply");
+  node->declare_parameter<bool>("publish_image", false);
+  node->declare_parameter<std::string>("point_cloud_output_file",
+                                       "human_cloud.ply");
   node->declare_parameter<std::string>("smpl_params_file", "");
 
   std::string calib_file = node->get_parameter("calibration_file").as_string();
@@ -48,6 +67,7 @@ int main(int argc, char **argv) {
   int max_height = node->get_parameter("max_height").as_int();
   bool publish_point_cloud =
       node->get_parameter("publish_point_cloud").as_bool();
+  bool publish_image = node->get_parameter("publish_image").as_bool();
   std::string smpl_params_path =
       node->get_parameter("smpl_params_file").as_string();
   std::vector<double> betas(10, 0.0);
@@ -66,6 +86,8 @@ int main(int argc, char **argv) {
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
   auto cloud_pub =
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
+  auto image_pub =
+      node->create_publisher<sensor_msgs::msg::Image>("/camera1/image", 10);
 
   // --- ROS spinning in background thread ---
   rclcpp::executors::SingleThreadedExecutor exec;
@@ -139,8 +161,22 @@ int main(int argc, char **argv) {
       cameras.push_back(uuid);
     cam_ids.push_back(conf.serial_number);
   }
+  for (int i = 0; i < clients.size(); i++) {
+    auto cam_info = clients[i]
+                        .zed.getCameraInformation()
+                        .camera_configuration.calibration_parameters;
+    auto conf = configurations[i];
+    // print fx fy cx cy
+    RCLCPP_INFO(
+        node->get_logger(),
+        "Camera SN %d: Intrinsics (fx, fy, cx, cy) = %.2f x %.2f x %.2f x %.2f",
+        conf.serial_number, cam_info.left_cam.fx, cam_info.left_cam.fy,
+        cam_info.left_cam.cx, cam_info.left_cam.cy);
+  }
+  std::string cam1_sn = std::to_string(cam_ids[0]);
+  std::string cam1_tf = "cam1_" + cam1_sn;
   broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics, cam_ids,
-                         "map");
+                         cam1_tf);
 
   // Ensure that fusion poses are set
 
@@ -193,7 +229,7 @@ int main(int argc, char **argv) {
                                                   yolo_net, yolov8Seg);
       }
       auto merged_cloud = mergePointClouds(pcs);
-      publishMergedPointCloud(cloud_pub, merged_cloud, "map");
+      publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf);
       // dump point cloud after 5 seconds
       if (!already_saved) {
         auto time_after = std::chrono::high_resolution_clock::now();
@@ -207,6 +243,20 @@ int main(int argc, char **argv) {
           RCLCPP_INFO(node->get_logger(), "Saved point cloud to %s",
                       pc_output_file.c_str());
         }
+      }
+    }
+    if (publish_image) {
+      sl::Mat view;
+      if (clients[0].zed.retrieveImage(view, sl::VIEW::LEFT) ==
+          sl::ERROR_CODE::SUCCESS) {
+        cv::Mat cvImageTemp(view.getHeight(), view.getWidth(),
+                            (view.getChannels() == 4) ? CV_8UC4 : CV_8UC1,
+                            view.getPtr<sl::uchar1>(sl::MEM::CPU));
+        cv::Mat cvImage = cvImageTemp.clone();
+        if (cvImage.channels() == 4) {
+          cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+        }
+        publish_image_msg(image_pub, cvImage, cam1_tf);
       }
     }
     Body fusedBody;

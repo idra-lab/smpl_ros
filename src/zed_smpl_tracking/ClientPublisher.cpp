@@ -26,7 +26,7 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
     std::cout << "Error: " << state << std::endl;
     return false;
   }
-
+  
   serial = zed.getCameraInformation().serial_number;
   p_trigger->states[serial] = false;
 

@@ -21,6 +21,10 @@ public:
 
     // Declare ROS2 parameters
     this->declare_parameter<std::string>("model_path", "");
+    this->declare_parameter<std::string>("frame_id", "map");
+
+    frame_id_ = this->get_parameter("frame_id").as_string();
+    RCLCPP_INFO(this->get_logger(), "Using frame_id: %s", frame_id_.c_str());
 
     // Read parameters
     model_path_ = this->get_parameter("model_path").as_string();
@@ -50,7 +54,7 @@ public:
                  .to(device_);
 
     // Initialize RViz visualization
-    vis_ = std::make_shared<SMPLRviz>(shared_from_this());
+    vis_ = std::make_shared<SMPLRviz>(shared_from_this(), frame_id_);
 
     // Subscribe to custom SMPL message
     subscriber_ = this->create_subscription<smpl_msgs::msg::Smpl>(
@@ -113,7 +117,7 @@ private:
     // extract keypoints and publish as PoseArray
     geometry_msgs::msg::PoseArray keypoints_msg;
     keypoints_msg.header.stamp = msg->header.stamp;
-    keypoints_msg.header.frame_id = "map";
+    keypoints_msg.header.frame_id = frame_id_;
     for (int i = 0; i < 24; ++i) {
       geometry_msgs::msg::Pose pose;
       auto joint = joints.index({i, Slice()});
@@ -174,6 +178,7 @@ private:
 
   // ---------------- Parameters ----------------
   std::string model_path_;
+  std::string frame_id_;
 };
 
 int main(int argc, char **argv) {
