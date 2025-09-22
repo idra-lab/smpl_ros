@@ -42,6 +42,7 @@ target_link_libraries(yolov8 ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY}
 
 # Executable
 add_executable(fitting_smpl src/body_fitting/fitting_smpl_ros.cpp)
+add_executable(fitting_sequence_smpl src/body_fitting/fitting_sequence_smpl_ros.cpp)
 add_executable(smpl_ros_viewer src/smpl_ros_viewer/smpl_ros_viewer.cpp)
 add_executable(zed_smpl_tracking
   src/zed_smpl_tracking/zed_smpl_tracking.cpp
@@ -52,7 +53,15 @@ add_executable(zed_smpl_tracking
 target_include_directories(fitting_smpl PRIVATE
   ${Open3D_INCLUDE_DIRS} include
 )
+target_include_directories(fitting_sequence_smpl PRIVATE
+  ${Open3D_INCLUDE_DIRS} include
+)
 target_link_libraries(fitting_smpl
+  torchure_smplx::smplx
+  ${TORCH_LIBRARIES}
+  ${Open3D_LIBRARIES}
+)
+target_link_libraries(fitting_sequence_smpl
   torchure_smplx::smplx
   ${TORCH_LIBRARIES}
   ${Open3D_LIBRARIES}
@@ -92,6 +101,12 @@ ament_target_dependencies(fitting_smpl
   geometry_msgs
   sensor_msgs
 )
+ament_target_dependencies(fitting_sequence_smpl
+  rclcpp
+  visualization_msgs
+  geometry_msgs
+  sensor_msgs
+)
 
 # Directly Link message to node
 ament_target_dependencies(smpl_ros_viewer
@@ -109,7 +124,7 @@ ament_target_dependencies(zed_smpl_tracking
 )
 
 # Install
-install(TARGETS fitting_smpl smpl_ros_viewer zed_smpl_tracking
+install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch rviz

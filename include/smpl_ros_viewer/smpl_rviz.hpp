@@ -1,19 +1,20 @@
 #pragma once
 
+#include <torch/torch.h>
+
+#include <geometry_msgs/msg/pose_array.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
-#include <torch/torch.h>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
-#include <geometry_msgs/msg/pose_array.hpp>
 
 static const int SMPL_PARENTS[24] = {-1, 0,  0,  0,  1,  2,  3,  4,
                                      5,  6,  7,  8,  9,  9,  9,  12,
                                      13, 14, 16, 17, 18, 19, 20, 21};
 
 class SMPLRviz {
-public:
+ public:
   SMPLRviz(rclcpp::Node::SharedPtr node, std::string frame_id = "map")
       : node_(node), frame_id_(frame_id) {
     marker_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -21,6 +22,7 @@ public:
     cloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
         "/target_cloud", 10);
     next_marker_id_ = 0;
+    RCLCPP_INFO(node_->get_logger(), "SMPLRviz initialized.");
   }
 
   void add_mesh(const torch::Tensor &vertices, const torch::Tensor &faces) {
@@ -101,9 +103,9 @@ public:
     arrow.id = next_marker_id_++;
     arrow.type = visualization_msgs::msg::Marker::ARROW;
     arrow.action = visualization_msgs::msg::Marker::ADD;
-    arrow.scale.x = 0.02; // shaft diameter
-    arrow.scale.y = 0.04; // head diameter
-    arrow.scale.z = 0.1;  // head length
+    arrow.scale.x = 0.02;  // shaft diameter
+    arrow.scale.y = 0.04;  // head diameter
+    arrow.scale.z = 0.1;   // head length
     arrow.color.a = 1.0;
     arrow.color.r = r;
     arrow.color.g = g;
@@ -130,7 +132,7 @@ public:
     skel.id = next_marker_id_++;
     skel.type = visualization_msgs::msg::Marker::LINE_LIST;
     skel.action = visualization_msgs::msg::Marker::ADD;
-    skel.scale.x = 0.02; // line thickness
+    skel.scale.x = 0.02;  // line thickness
     skel.color.a = 1.0;
     skel.color.r = 0.0;
     skel.color.g = 1.0;
@@ -236,7 +238,7 @@ public:
     next_marker_id_ = 0;
   }
 
-private:
+ private:
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       marker_pub_;

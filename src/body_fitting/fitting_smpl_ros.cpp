@@ -1,9 +1,8 @@
-#pragma once
+#include <open3d/Open3D.h>
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <open3d/Open3D.h>
 #include <rclcpp/rclcpp.hpp>
 
 #include "chamfer.h"
@@ -21,7 +20,7 @@ using namespace torch::indexing;
 /// SMPLOptimizerNode
 /// ROS2 Node for optimizing SMPL model parameters to fit a target point cloud.
 class SMPLOptimizerNode : public rclcpp::Node {
-public:
+ public:
   SMPLOptimizerNode()
       : Node("smpl_optimizer"),
         device_(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU),
@@ -33,7 +32,8 @@ public:
     this->declare_parameter<std::string>("model_path", "");
     this->declare_parameter<std::string>("config_path", "");
     this->declare_parameter<std::string>("point_cloud_path", "");
-    this->declare_parameter<std::string>("smpl_params_output_file", "smpl_optimized.json");
+    this->declare_parameter<std::string>("smpl_params_output_file",
+                                         "smpl_optimized.json");
   }
 
   /// Initialize the node: load model, config, point cloud, and setup
@@ -76,13 +76,14 @@ public:
     exit(0);
   }
 
-private:
+ private:
   // -------------------- Initialization Helpers --------------------
   void load_parameters() {
     model_path_ = this->get_parameter("model_path").as_string();
     config_path_ = this->get_parameter("config_path").as_string();
     point_cloud_path_ = this->get_parameter("point_cloud_path").as_string();
-    smpl_params_output_file_ = this->get_parameter("smpl_params_output_file").as_string();
+    smpl_params_output_file_ =
+        this->get_parameter("smpl_params_output_file").as_string();
 
     if (!std::filesystem::exists(model_path_) ||
         !std::filesystem::exists(config_path_) ||
@@ -117,7 +118,7 @@ private:
     cloud_ptr = cloud_ptr->VoxelDownSample(0.01);
     auto [vertices, colors] = open3d_pointcloud_to_tensor(*cloud_ptr);
 
-    vertices_target_ = vertices.to(device_).unsqueeze(0); // (1, N, 3)
+    vertices_target_ = vertices.to(device_).unsqueeze(0);  // (1, N, 3)
     RCLCPP_INFO(this->get_logger(), "Loaded target point cloud with %ld points",
                 vertices_target_.size(1));
 
@@ -215,6 +216,7 @@ private:
       auto loss = chamfer_.forward(vertices_pred.to(torch::kFloat64),
                                    vertices_target_.to(torch::kFloat64), true);
       loss.backward();
+
       optimizer.step();
 
       // Compute gradient magnitude for convergence
@@ -243,7 +245,7 @@ private:
   void dump_parameters_json(std::string filename = "optimized_params.json") {
     auto torch_to_std_vector = [](const torch::Tensor &tensor) {
       std::vector<double> vec(tensor.numel());
-      for(int i=0; i<tensor[0].numel(); i++) {
+      for (int i = 0; i < tensor[0].numel(); i++) {
         if (std::isnan(tensor[0][i].item<double>())) {
           RCLCPP_WARN(rclcpp::get_logger("dump_parameters_json"),
                       "NaN detected in parameters, setting to zero.");
@@ -253,14 +255,14 @@ private:
       }
       return vec;
     };
-    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping betas with sizes: "
-                                              << betas_.sizes());
-    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping body_pose with sizes: "
-                                              << body_pose_.sizes());
+    RCLCPP_INFO_STREAM(this->get_logger(),
+                       "Dumping betas with sizes: " << betas_.sizes());
+    RCLCPP_INFO_STREAM(this->get_logger(),
+                       "Dumping body_pose with sizes: " << body_pose_.sizes());
     RCLCPP_INFO_STREAM(this->get_logger(), "Dumping global_orient with sizes: "
-                                              << global_orient_.sizes());
-    RCLCPP_INFO_STREAM(this->get_logger(), "Dumping transl with sizes: "
-                                              << transl_.sizes());
+                                               << global_orient_.sizes());
+    RCLCPP_INFO_STREAM(this->get_logger(),
+                       "Dumping transl with sizes: " << transl_.sizes());
     nlohmann::json j;
     j["betas"] = torch_to_std_vector(betas_);
     j["body_pose"] = torch_to_std_vector(body_pose_);
@@ -269,8 +271,8 @@ private:
 
     std::ofstream out(filename);
     out << std::setw(4) << j << std::endl;
-    RCLCPP_INFO(this->get_logger(),
-                "Dumped optimized parameters to %s", filename.c_str());
+    RCLCPP_INFO(this->get_logger(), "Dumped optimized parameters to %s",
+                filename.c_str());
     out.close();
   }
 
@@ -289,7 +291,7 @@ private:
 };
 
 int main(int argc, char *argv[]) {
-  std::cout << std::unitbuf; // Auto-flush every output
+  std::cout << std::unitbuf;  // Auto-flush every output
   rclcpp::init(argc, argv);
 
   auto node = std::make_shared<SMPLOptimizerNode>();
