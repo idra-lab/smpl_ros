@@ -40,7 +40,8 @@ To get started, make sure you have the following installed:
 4. Clone the repository   
     ```
     cd ~/your_ros2_ws/src
-    git clone git@github.com:Hydran00/smpl_ros.git
+    git clone https://github.com/idra-lab/smpl_ros.git
+    git clone https://github.com/idra-lab/smpl_msgs.git
     ```
 5. Build the workspace  
     ```
