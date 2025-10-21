@@ -4,8 +4,9 @@ ClientPublisher::ClientPublisher() {}
 
 ClientPublisher::~ClientPublisher() { zed.close(); }
 
-bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
-
+bool ClientPublisher::open(sl::InputType input,
+                           sl::COORDINATE_SYSTEM coord_system, Trigger *ref,
+                           int sdk_gpu_id) {
   p_trigger = ref;
 
   sl::InitParameters init_parameters;
@@ -17,19 +18,26 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
   // set max_depth to 10m
   init_parameters.depth_maximum_distance = 4.0;
   // set ROS coordinate system
-  init_parameters.coordinate_system =
-      sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
-  init_parameters.camera_resolution = sl::RESOLUTION::HD720;
-//   init_parameters.reference_frame = sl::REFERENCE_FRAME::WORLD;
+  init_parameters.coordinate_system = coord_system;
+  init_parameters.camera_resolution = sl::RESOLUTION::HD2K;
+  //   init_parameters.reference_frame = sl::REFERENCE_FRAME::WORLD;
   auto state = zed.open(init_parameters);
   if (state != sl::ERROR_CODE::SUCCESS) {
     std::cout << "Error: " << state << std::endl;
     return false;
   }
-  
   serial = zed.getCameraInformation().serial_number;
   p_trigger->states[serial] = false;
+  std::cout << "ZED camera serial number: " << serial << std::endl;
 
+  // print calibration matrix
+  auto cam_params =
+      zed.getCameraInformation().camera_configuration.calibration_parameters;
+  std::cout << "Camera SN " << serial
+            << ": Intrinsics (fx, fy, cx, cy) = " << cam_params.left_cam.fx
+            << " x " << cam_params.left_cam.fy << " x "
+            << cam_params.left_cam.cx << " x " << cam_params.left_cam.cy
+            << std::endl;
   // in most cases in body tracking setup, the cameras are static
   sl::PositionalTrackingParameters positional_tracking_parameters;
   // in most cases for body detection application the camera is static:
@@ -55,7 +63,7 @@ bool ClientPublisher::open(sl::InputType input, Trigger *ref, int sdk_gpu_id) {
     std::cout << "Error: " << state << std::endl;
     return false;
   }
-
+  std::cout << "ZED camera initialized successfully." << std::endl;
   return true;
 }
 
@@ -70,8 +78,7 @@ void ClientPublisher::start() {
 }
 
 void ClientPublisher::stop() {
-  if (runner.joinable())
-    runner.join();
+  if (runner.joinable()) runner.join();
   zed.close();
 }
 
@@ -113,8 +120,7 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
 
   // 1️⃣ Grab RGB image
   sl::Mat sl_image;
-  if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS)
-  {
+  if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
     return points_colors;
   }
 
@@ -124,22 +130,20 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
 
   // 2️⃣ YOLO detection
   std::vector<OutputParams> detections;
-  if (!yolov8Seg.Detect(cvImage, net, detections))
-    return points_colors;
+  if (!yolov8Seg.Detect(cvImage, net, detections)) return points_colors;
 
   // 3️⃣ Pick first human detection
   cv::Rect human_bbox;
   cv::Mat human_mask;
   for (auto &det : detections) {
-    if (det.id == 0) { // person class
+    if (det.id == 0) {  // person class
       human_bbox = det.box;
       human_mask = det.boxMask.clone();
       break;
     }
   }
 
-  if (human_mask.empty())
-    return points_colors;
+  if (human_mask.empty()) return points_colors;
 
   // 4️⃣ Erode mask to clean edges
   cv::erode(human_mask, human_mask,
@@ -157,11 +161,10 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
 
   for (int y = human_bbox.y; y < human_bbox.y + human_bbox.height; y++) {
     for (int x = human_bbox.x; x < human_bbox.x + human_bbox.width; x++) {
-      if (y >= height || x >= width)
-        continue;
+      if (y >= height || x >= width) continue;
 
       // Mask is relative to bbox
-      if (human_mask.at<uchar>(y - human_bbox.y, x - human_bbox.x) == 0){
+      if (human_mask.at<uchar>(y - human_bbox.y, x - human_bbox.x) == 0) {
         continue;
       }
 
@@ -171,8 +174,7 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
       float Z = ptr[idx + 2];
       float rgba_f = ptr[idx + 3];
 
-      if (!std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
-      {
+      if (!std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z)) {
         continue;
       }
 
@@ -191,4 +193,53 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
   }
 
   return points_colors;
+}
+
+std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+ClientPublisher::extractPointCloudFast() {
+  std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> pc_data;
+  // Try to grab a new frame
+  if (zed.grab() != sl::ERROR_CODE::SUCCESS) {
+    return pc_data;  // No new frame available
+  }
+
+  // Retrieve point cloud directly in CPU memory for fast access
+  sl::Mat pc_mat;
+  if (zed.retrieveMeasure(pc_mat, sl::MEASURE::XYZRGBA, sl::MEM::CPU) !=
+      sl::ERROR_CODE::SUCCESS) {
+    return pc_data;
+  }
+
+  int width = pc_mat.getWidth();
+  int height = pc_mat.getHeight();
+
+  // Preallocate to avoid reallocations
+  pc_data.clear();
+  pc_data.reserve(width * height);
+
+  // Pointer to raw float4 data
+  const sl::float4 *data_ptr = pc_mat.getPtr<sl::float4>(sl::MEM::CPU);
+  const size_t total = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+  for (size_t i = 0; i < total; ++i) {
+    const sl::float4 &p = data_ptr[i];
+
+    // Skip invalid or NaN points
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+      continue;
+
+    // 3D position
+    Eigen::Vector3d pos(p.x, p.y, p.z);
+
+    // Decode RGBA (stored as packed float)
+    uint32_t color_uint = *reinterpret_cast<const uint32_t *>(&p.w);
+    const unsigned char *rgba =
+        reinterpret_cast<const unsigned char *>(&color_uint);
+
+    // RGB normalized to [0, 1]
+    Eigen::Vector3d color(rgba[0] / 255.0, rgba[1] / 255.0, rgba[2] / 255.0);
+
+    pc_data.emplace_back(pos, color);
+  }
+  return pc_data;
 }

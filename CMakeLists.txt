@@ -30,7 +30,7 @@ find_package(GLUT REQUIRED)
 find_package(GLEW REQUIRED)
 SET(OpenGL_GL_PREFERENCE GLVND)
 find_package(OpenGL REQUIRED)
-find_package(OpenCV)
+find_package(OpenCV 4.11)
 
 set(ZED_LIBS ${ZED_LIBRARIES} ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY})
 
@@ -46,6 +46,10 @@ add_executable(fitting_sequence_smpl src/body_fitting/fitting_sequence_smpl_ros.
 add_executable(smpl_ros_viewer src/smpl_ros_viewer/smpl_ros_viewer.cpp)
 add_executable(zed_smpl_tracking
   src/zed_smpl_tracking/zed_smpl_tracking.cpp
+  src/zed_smpl_tracking/ClientPublisher.cpp
+)
+add_executable(zed_fusion_smpl_tracking
+  src/zed_smpl_tracking/zed_fusion_smpl_tracking.cpp
   src/zed_smpl_tracking/ClientPublisher.cpp
 )
 
@@ -95,6 +99,26 @@ target_link_libraries(zed_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LI
   ${TORCH_LIBRARIES}
 )
 
+# ZED SMPL Tracking
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${CUDA_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${ZED_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${GLEW_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${GLUT_INCLUDE_DIR})
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${OpenCV_INCLUDE_DIRS})
+link_directories(zed_fusion_smpl_tracking ${ZED_LIBRARY_DIR})
+link_directories(zed_fusion_smpl_tracking ${CUDA_LIBRARY_DIRS})
+link_directories(zed_fusion_smpl_tracking ${GLEW_LIBRARY_DIRS})
+link_directories(zed_fusion_smpl_tracking ${GLUT_LIBRARY_DIRS})
+link_directories(zed_fusion_smpl_tracking ${OpenGL_LIBRARY_DIRS})
+link_directories(zed_fusion_smpl_tracking ${OpenCV_LIBRARY_DIRS})
+target_link_libraries(zed_fusion_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
+  Eigen3::Eigen
+  yolov8
+  torchure_smplx::smplx
+  ${TORCH_LIBRARIES}
+)
+
 ament_target_dependencies(fitting_smpl
   rclcpp
   visualization_msgs
@@ -122,9 +146,16 @@ ament_target_dependencies(zed_smpl_tracking
   tf2_ros
   cv_bridge
 )
+ament_target_dependencies(zed_fusion_smpl_tracking
+  rclcpp
+  smpl_msgs
+  sensor_msgs
+  tf2_ros
+  cv_bridge
+)
 
 # Install
-install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking
+install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking zed_fusion_smpl_tracking
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch rviz

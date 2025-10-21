@@ -12,12 +12,12 @@
     "shoulder_r_start": [
         0.0,
         0.0,
-        60.0
+        0.0
     ],
     "shoulder_l_start": [
         0.0,
         0.0,
-        -60.0
+        0.0
     ],
     "pos": {
         "y_offset": 1.4,
