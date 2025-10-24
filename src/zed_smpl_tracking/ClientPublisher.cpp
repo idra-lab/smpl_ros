@@ -38,6 +38,13 @@ bool ClientPublisher::open(sl::InputType input,
             << " x " << cam_params.left_cam.fy << " x "
             << cam_params.left_cam.cx << " x " << cam_params.left_cam.cy
             << std::endl;
+  std::cout << "Distortion coefficients: ";
+  // Distortion factor : [k1, k2, p1, p2, k3, k4, k5, k6, s1, s2, s3, s4]
+  for (int i = 0; i < 12; i++) {
+    std::cout << cam_params.left_cam.disto[i];
+    if (i != 11) std::cout << ", ";
+  }
+  std::cout << std::endl;
   // in most cases in body tracking setup, the cameras are static
   sl::PositionalTrackingParameters positional_tracking_parameters;
   // in most cases for body detection application the camera is static:

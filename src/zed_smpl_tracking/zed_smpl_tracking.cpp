@@ -31,10 +31,10 @@ int main(int argc, char **argv) {
 
   // ------------------ Parameters ------------------
   node->declare_parameter<std::string>("yolo_model_path", "");
-  node->declare_parameter<bool>("publish_point_cloud", true);
-  node->declare_parameter<bool>("publish_human_point_cloud", true);
-  node->declare_parameter<bool>("publish_image", true);
-  node->declare_parameter<bool>("publish_human", true);
+  node->declare_parameter<bool>("publish_point_cloud", false);
+  node->declare_parameter<bool>("publish_human_point_cloud", false);
+  node->declare_parameter<bool>("publish_image", false);
+  node->declare_parameter<bool>("publish_human", false);
   node->declare_parameter<std::string>("point_cloud_output_file",
                                        "human_cloud.ply");
   node->declare_parameter<std::string>("smpl_params_file", "");
