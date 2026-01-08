@@ -57,6 +57,7 @@ bool ClientPublisher::open(sl::InputType input,
       sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
   body_tracking_parameters.body_format = sl::BODY_FORMAT::BODY_38;
   body_tracking_parameters.enable_body_fitting = true;
+  // needed to retrieve local orientations
   body_tracking_parameters.enable_tracking = true;
   state = zed.enableBodyTracking(body_tracking_parameters);
   if (state != sl::ERROR_CODE::SUCCESS) {
@@ -177,7 +178,8 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
       if (!std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z)) {
         continue;
       }
-
+      
+      // Transform point to desired frame
       Eigen::Vector4d pt(X, Y, Z, 1.0);
       Eigen::Vector3d pt_transformed = (T * pt).head<3>();
 

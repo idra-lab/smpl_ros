@@ -45,6 +45,9 @@ public:
     smpl_->eval();
     faces_ = smpl_->faces();
 
+    RCLCPP_INFO(this->get_logger(), "Loaded SMPL model with %d betas.",
+                smpl_->num_betas());
+
     // Allocate tensors for SMPL parameters
     const int batch_size = 1;
     body_pose_ = torch::zeros({batch_size, 69}, torch::kFloat64).to(device_);
@@ -83,6 +86,10 @@ private:
                                 static_cast<double>(msg->global_orient[i]));
     }
     // Copy betas
+    if (smpl_->num_betas() != msg->betas.size()) {
+      throw std::runtime_error(
+          "The number of betas in the SMPL model and message do not match");
+    }
     for (int i = 0; i < smpl_->num_betas(); ++i) {
       betas_.index_put_({0, i}, static_cast<double>(msg->betas[i]));
     }
@@ -136,7 +143,7 @@ private:
     smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_);
 
     // --- Update RViz ---
-    vis_->add_mesh(smpl_vertices.unsqueeze(0), faces_);
+    vis_->add_mesh(smpl_vertices.unsqueeze(0), faces_, msg->header.stamp);
 
     // --- Keypoints ---
     torch::Tensor keypoints =
@@ -150,12 +157,11 @@ private:
                            static_cast<double>(msg->keypoints[i * 3 + 2]));
     }
     keypoints = torch::matmul(keypoints, SMPL_TO_ROS_);
-    vis_->add_keypoints(keypoints);
-    vis_->add_skeleton(keypoints);
+    vis_->add_keypoints(keypoints, msg->header.stamp);
+    vis_->add_skeleton(keypoints, msg->header.stamp);
     auto start = keypoints.index({0, Slice()});
     torch::Tensor end = torch::zeros({3}, torch::kFloat64).to(device_);
-    vis_->add_arrow(start, end);
-
+    vis_->add_arrow(start, end, msg->header.stamp);
     vis_->update_visualization();
   }
 

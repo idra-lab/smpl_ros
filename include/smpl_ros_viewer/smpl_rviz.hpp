@@ -14,7 +14,7 @@ static const int SMPL_PARENTS[24] = {-1, 0,  0,  0,  1,  2,  3,  4,
                                      13, 14, 16, 17, 18, 19, 20, 21};
 
 class SMPLRviz {
- public:
+public:
   SMPLRviz(rclcpp::Node::SharedPtr node, std::string frame_id = "map")
       : node_(node), frame_id_(frame_id) {
     marker_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -25,10 +25,12 @@ class SMPLRviz {
     RCLCPP_INFO(node_->get_logger(), "SMPLRviz initialized.");
   }
 
-  void add_mesh(const torch::Tensor &vertices, const torch::Tensor &faces) {
+  void add_mesh(const torch::Tensor &vertices, const torch::Tensor &faces,
+                const rclcpp::Time &stamp = rclcpp::Clock().now()) {
     visualization_msgs::msg::Marker mesh;
     mesh.header.frame_id = frame_id_;
     mesh.ns = "smpl_mesh";
+    mesh.header.stamp = stamp;
     mesh.id = next_marker_id_++;
     mesh.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
     mesh.action = visualization_msgs::msg::Marker::ADD;
@@ -60,13 +62,14 @@ class SMPLRviz {
       mesh.points.push_back(p1);
       mesh.points.push_back(p2);
     }
-
     markers_.markers.push_back(mesh);
   }
 
-  void add_keypoints(const torch::Tensor &keypoints) {
+  void add_keypoints(const torch::Tensor &keypoints,
+                     const rclcpp::Time &stamp) {
     visualization_msgs::msg::Marker kp;
     kp.header.frame_id = frame_id_;
+    kp.header.stamp = stamp;
     kp.ns = "keypoints";
     kp.id = next_marker_id_++;
     kp.type = visualization_msgs::msg::Marker::SPHERE_LIST;
@@ -88,8 +91,8 @@ class SMPLRviz {
     markers_.markers.push_back(kp);
   }
   void add_arrow(const torch::Tensor &start, const torch::Tensor &end,
-                 const std::string &ns = "arrows", float r = 0.0, float g = 0.0,
-                 float b = 1.0) {
+                 const rclcpp::Time &stamp, const std::string &ns = "arrows",
+                 float r = 0.0, float g = 0.0, float b = 1.0) {
     if (start.sizes() != end.sizes() || start.sizes().size() != 1 ||
         start.size(0) != 3) {
       RCLCPP_ERROR(rclcpp::get_logger("SMPLRviz"),
@@ -101,11 +104,12 @@ class SMPLRviz {
     arrow.header.frame_id = frame_id_;
     arrow.ns = ns;
     arrow.id = next_marker_id_++;
+    arrow.header.stamp = stamp;
     arrow.type = visualization_msgs::msg::Marker::ARROW;
     arrow.action = visualization_msgs::msg::Marker::ADD;
-    arrow.scale.x = 0.02;  // shaft diameter
-    arrow.scale.y = 0.04;  // head diameter
-    arrow.scale.z = 0.1;   // head length
+    arrow.scale.x = 0.02; // shaft diameter
+    arrow.scale.y = 0.04; // head diameter
+    arrow.scale.z = 0.1;  // head length
     arrow.color.a = 1.0;
     arrow.color.r = r;
     arrow.color.g = g;
@@ -125,14 +129,15 @@ class SMPLRviz {
     markers_.markers.push_back(arrow);
   }
 
-  void add_skeleton(const torch::Tensor &keypoints) {
+  void add_skeleton(const torch::Tensor &keypoints, const rclcpp::Time &stamp) {
     visualization_msgs::msg::Marker skel;
     skel.header.frame_id = frame_id_;
     skel.ns = "skeleton";
+    skel.header.stamp = stamp;
     skel.id = next_marker_id_++;
     skel.type = visualization_msgs::msg::Marker::LINE_LIST;
     skel.action = visualization_msgs::msg::Marker::ADD;
-    skel.scale.x = 0.02;  // line thickness
+    skel.scale.x = 0.02; // line thickness
     skel.color.a = 1.0;
     skel.color.r = 0.0;
     skel.color.g = 1.0;
@@ -220,9 +225,6 @@ class SMPLRviz {
   }
 
   void update_visualization() {
-    for (auto &m : markers_.markers) {
-      m.header.stamp = node_->now();
-    }
     marker_pub_->publish(markers_);
     markers_.markers.clear();
     next_marker_id_ = 0;
@@ -238,7 +240,7 @@ class SMPLRviz {
     next_marker_id_ = 0;
   }
 
- private:
+private:
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       marker_pub_;

@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -20,6 +21,34 @@
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
 #include "zed_smpl_tracking/utils.hpp"
+
+// Simple Timer Class for measuring elapsed time
+class SimpleTimer {
+public:
+  void tik() {
+    last_ = clock::now();
+    running_ = true;
+  }
+
+  void tok(const char *label = "Elapsed") {
+    if (!running_)
+      return;
+
+    auto now = clock::now();
+    auto elapsed =
+        std::chrono::duration<double, std::milli>(now - last_).count();
+
+    std::cout << label << ": " << elapsed << " ms\n";
+
+    // reset per la prossima misura
+    last_ = now;
+  }
+
+private:
+  using clock = std::chrono::steady_clock;
+  clock::time_point last_;
+  bool running_ = false;
+};
 
 void publish_image_msg(
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub,
@@ -41,10 +70,12 @@ int main(int argc, char **argv) {
   auto node = rclcpp::Node::make_shared("smpl_publisher_node");
 
   // ------------------ Declare ROS2 Parameters ------------------
-  node->declare_parameter<std::string>("calibration_file",
-                                       "/home/nardi/smpl_ros/zed_calib3.json");
-  node->declare_parameter<std::string>("yolo_model_path",
-                                       "/home/nardi/smpl_ros/yolov8x-seg.onnx");
+  node->declare_parameter<std::string>(
+      "calibration_file",
+      "/home/nardi/sensor_fusion_ws/smpl_ros_ws/calibrated_fusion_config.json");
+  node->declare_parameter<std::string>(
+      "yolo_model_path",
+      "/home/nardi/sensor_fusion_ws/smpl_ros_ws/yolov8s-seg.onnx");
   auto tf_static_broadcaster_ =
       std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   // used only with fusion API
@@ -133,7 +164,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  for (auto &client : clients) client.start();
+  for (auto &client : clients)
+    client.start();
 
   // Fusion initialization
   sl::InitFusionParameters init_params;
@@ -173,6 +205,10 @@ int main(int argc, char **argv) {
         "Camera SN %d: Intrinsics (fx, fy, cx, cy) = %.2f x %.2f x %.2f x %.2f",
         conf.serial_number, cam_info.left_cam.fx, cam_info.left_cam.fy,
         cam_info.left_cam.cx, cam_info.left_cam.cy);
+    RCLCPP_INFO_STREAM(node->get_logger(), "Camera SN "
+                                               << conf.serial_number
+                                               << ": Extrinsics matrix:\n"
+                                               << T_cams_extrinsics[i]);
   }
   std::string cam1_sn = std::to_string(cam_ids[0]);
   std::string cam1_tf = "cam1_" + cam1_sn;
@@ -218,9 +254,12 @@ int main(int argc, char **argv) {
 
   auto time_now = std::chrono::high_resolution_clock::now();
   bool already_saved = false;
+
+  SimpleTimer timer;
   // ------------------ Main loop ------------------
   while (rclcpp::ok()) {
     trigger.notifyZED();
+    std::cout << "------------------ New Frame ------------------" << std::endl;
 
     std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>> pcs(
         clients.size());
@@ -287,42 +326,52 @@ int main(int argc, char **argv) {
         fusedBody = bodies[0];
       }
     } else {
+      timer.tik();
       // Prepare per-camera BodyData vector
       for (size_t i = 0; i < cameras.size(); i++) {
         clients[i].zed.retrieveBodies(detected_bodies[i]);
+        timer.tok((std::string("Bodies retrieval time for camera ") + std::to_string(cam_ids[i])).c_str());
         if (detected_bodies[i].body_list.empty()) {
           continue;
         }
         // extract only the first body (TODO: get most centered?)
         raw_bodies_vector.push_back(detected_bodies[i].body_list[0]);
       }
-      if (raw_bodies_vector.empty()) {
-        continue;
+      if (raw_bodies_vector.size() < cameras.size()) {
+        RCLCPP_WARN(node->get_logger(),
+                    "Not all cameras detected bodies (%ld/%ld)",
+                    raw_bodies_vector.size(), cameras.size());
       }
       // Extract vector of Body converting from sl::Bodies to custom Body
       // struct
       std::vector<Body> bodies =
           extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
+      timer.tok("Bodies extraction time");
       // Merge the bodies into a single fused BodyData
       if (!raw_bodies_vector.empty()) {
         fusedBody = mergeBodiesWithExtrinsics(bodies, T_cams_extrinsics);
       }
+      timer.tok("Bodies merging time");
     }
     raw_bodies_vector.clear();
 
     // Build and publish SMPL message
     auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
+    timer.tok("SMPL message building time");
     smpl_pub->publish(msg);
+    timer.tok("SMPL message publishing time");
   }
 
   // ------------------ Shutdown ------------------
   trigger.running = false;
   trigger.notifyZED();
-  for (auto &client : clients) client.stop();
+  for (auto &client : clients)
+    client.stop();
   fusion.close();
 
   exec.cancel();
-  if (ros_spin_thread.joinable()) ros_spin_thread.join();
+  if (ros_spin_thread.joinable())
+    ros_spin_thread.join();
 
   rclcpp::shutdown();
   return 0;

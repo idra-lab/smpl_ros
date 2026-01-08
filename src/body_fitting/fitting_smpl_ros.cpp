@@ -233,7 +233,7 @@ class SMPLOptimizerNode : public rclcpp::Node {
       // Update visualization
       if (VISUALIZATION &&
           (step % VISUALIZATION_UPDATE_EVERY == 0 || step == steps - 1)) {
-        vis_->add_mesh(vertices_pred, faces_);
+        vis_->add_mesh(vertices_pred, faces_, rclcpp::Clock().now());
         vis_->update_visualization();
       }
     }

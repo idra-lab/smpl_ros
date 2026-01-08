@@ -4,7 +4,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sl/Camera.hpp>
 #include <vector>
-
+#include <rclcpp/rclcpp.hpp>
 // --- Quaternion averaging using SVD ---
 Eigen::Quaterniond
 averageQuaternionsSVD(const std::vector<Eigen::Quaterniond> &quats) {
@@ -44,8 +44,11 @@ Body mergeBodiesWithExtrinsics(
     const std::vector<Eigen::Matrix4d> &T_cams_extrinsics) {
   Body merged;
 
-  if (bodies.empty() || bodies.size() != T_cams_extrinsics.size())
+  if (bodies.empty() || bodies.size() != T_cams_extrinsics.size()){
+    RCLCPP_WARN(rclcpp::get_logger("BodyMerger"),
+                "No bodies to merge or size mismatch!");
     return merged;
+  }
 
   std::vector<Body> valid_bodies;
   valid_bodies.reserve(bodies.size());
@@ -65,7 +68,11 @@ Body mergeBodiesWithExtrinsics(
     // Transform keypoints and orientations
     for (size_t j = 0; j < num_joints; j++) {
       body.keypoints[j] = transformPoint(body.keypoints[j], T);
-      body.local_orient[j] = body.local_orient[j]; 
+      RCLCPP_INFO(rclcpp::get_logger("BodyMerger"),
+                  "Before Transform Quaternion %f %f %f %f",
+                  body.local_orient[j].w(), body.local_orient[j].x(),
+                  body.local_orient[j].y(), body.local_orient[j].z());
+      body.local_orient[j] = body.local_orient[j];
     }
 
     // Transform root
