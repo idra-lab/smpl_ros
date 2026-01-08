@@ -25,11 +25,31 @@ inline Eigen::Matrix4d ros_to_image_transform() {
   return T;
 }
 // ---- SMPL -> ZED mapping
-static const std::map<int, int> SMPL_TO_ZED = {
-    {0, 0},   {1, 18},  {2, 19},  {3, 1},   {4, 20},  {5, 21},
-    {6, 2},   {7, 22},  {8, 23},  {9, 3},   {10, 24}, {11, 25},
-    {12, 4},  {13, 10}, {14, 11}, {15, 5},  {16, 12}, {17, 13},
-    {18, 14}, {19, 15}, {20, 16}, {21, 17}, {22, 30}, {23, 31},
+static constexpr std::array<int, 24> SMPL_TO_ZED = {
+    0,   // 0
+    18,  // 1
+    19,  // 2
+    1,   // 3
+    20,  // 4
+    21,  // 5
+    2,   // 6
+    22,  // 7
+    23,  // 8
+    3,   // 9
+    24,  // 10
+    25,  // 11
+    4,   // 12
+    10,  // 13
+    11,  // 14
+    5,   // 15
+    12,  // 16
+    13,  // 17
+    14,  // 18
+    15,  // 19
+    16,  // 20
+    17,  // 21
+    30,  // 22
+    31   // 23
 };
 
 // SMPL parents (standard 24-joint kinematic tree). -1 is root.
@@ -144,48 +164,46 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   return rvec;
 }
 
-// ---- Extract Body from sl::Body ----
-std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
-                                  const std::map<int, int> &SMPL_TO_ZED) {
-  std::vector<Body> bodies;
-  bodies.reserve(zed_bodies.size());
+std::vector<Body> extractBodyData(
+    const std::vector<sl::BodyData>& zed_bodies,
+    const std::array<int, 24>& SMPL_TO_ZED)
+{
+    std::vector<Body> bodies;
+    bodies.reserve(zed_bodies.size());
 
-  for (size_t i = 0; i < zed_bodies.size(); ++i) {
-    const auto &zed_body = zed_bodies[i];
-    Body body;
+    for (const auto& zed_body : zed_bodies) {
+        Body body;
 
-    // --- Root pose ---
-    body.root_position = Eigen::Vector3d(
-        zed_body.keypoint[2].x, zed_body.keypoint[2].y, zed_body.keypoint[2].z);
-    body.global_orientation = Eigen::Quaterniond(
-        zed_body.global_root_orientation.w, zed_body.global_root_orientation.x,
-        zed_body.global_root_orientation.y, zed_body.global_root_orientation.z);
-    body.global_orientation.normalize();
-    // --- Local orientations ---
-    for (int j = 1; j < 24; ++j) {
-      auto it = SMPL_TO_ZED.find(j);
-      if (it != SMPL_TO_ZED.end()) {
-        int zed_idx = it->second;
-        // Note: ZED local orientations are relative to the parent joint, so to
-        // get the absolute orientation you need to chain-multiply the
-        // quaternions up to the root.
-        auto q = zed_body.local_orientation_per_joint;
-        body.local_orient[j] = Eigen::Quaterniond(q[zed_idx].w, q[zed_idx].x,
-                                                  q[zed_idx].y, q[zed_idx].z);
-      }
+        // Root
+        const auto& root = zed_body.keypoint[2];
+        body.root_position << root.x, root.y, root.z;
+
+        const auto& gro = zed_body.global_root_orientation;
+        body.global_orientation = Eigen::Quaterniond(
+            gro.w, gro.x, gro.y, gro.z);
+
+        // Local orientations
+        const auto& q = zed_body.local_orientation_per_joint;
+        for (int j = 1; j < 24; ++j) {
+            int zed_idx = SMPL_TO_ZED[j];
+            body.local_orient[j] = Eigen::Quaterniond(
+                q[zed_idx].w,
+                q[zed_idx].x,
+                q[zed_idx].y,
+                q[zed_idx].z);
+        }
+
+        // Keypoints
+        for (int j = 0; j < 24; ++j) {
+            int zed_idx = SMPL_TO_ZED[j];
+            const auto& kp = zed_body.keypoint[zed_idx];
+            body.keypoints[j] << kp.x, kp.y, kp.z;
+        }
+
+        bodies.emplace_back(std::move(body));
     }
 
-    // --- Keypoints ---
-    for (int j = 0; j < 24; ++j) {
-      int zed_idx = SMPL_TO_ZED.at(j);
-      const auto &kp = zed_body.keypoint.at(zed_idx);
-      body.keypoints[j] = Eigen::Vector3d(kp.x, kp.y, kp.z);
-    }
-
-    bodies.push_back(std::move(body));
-  }
-
-  return bodies;
+    return bodies;
 }
 
 // ---- Build SMPL message from ZED fused body and apply transforms ----
