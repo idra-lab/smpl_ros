@@ -19,11 +19,13 @@ struct Trigger {
       const int nb_zed = states.size();
       while (wait_for_zed) {
         int count_r = 0;
-        for (auto &it : states) count_r += it.second;
+        for (auto &it : states)
+          count_r += it.second;
         wait_for_zed = count_r != nb_zed;
         sl::sleep_ms(1);
       }
-      for (auto &it : states) it.second = false;
+      for (auto &it : states)
+        it.second = false;
     }
   }
 
@@ -33,7 +35,7 @@ struct Trigger {
 };
 
 class ClientPublisher {
- public:
+public:
   int serial;
   sl::Camera zed;
   ClientPublisher();
@@ -45,17 +47,17 @@ class ClientPublisher {
   void stop();
   void setStartSVOPosition(unsigned pos);
 
-  std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   getFilteredPointCloud(const Eigen::Matrix4d &T, cv::dnn::Net &net,
-                        Yolov8Seg &yolov8Seg);
-  std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
-  extractPointCloudFast();
+                        Yolov8Seg &yolov8Seg, bool include_normals);
+  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
+  extractPointCloudFast(bool include_normals);
 
- private:
+private:
   void work();
   std::thread runner;
   std::mutex mtx;
   Trigger *p_trigger;
 };
 
-#endif  // ! __SENDER_RUNNER_HDR__
+#endif // ! __SENDER_RUNNER_HDR__

@@ -2,7 +2,7 @@
 #define BODYSTRUCT_HPP
 #include <Eigen/Dense>
 // define the Body structure with minimal fields from sl::Body
-typedef struct Body {
+struct Body {
   Eigen::Quaterniond global_orientation;   // root/global orientation
   Eigen::Vector3d root_position;           // root translation
 

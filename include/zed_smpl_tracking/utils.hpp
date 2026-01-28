@@ -26,30 +26,30 @@ inline Eigen::Matrix4d ros_to_image_transform() {
 }
 // ---- SMPL -> ZED mapping
 static constexpr std::array<int, 24> SMPL_TO_ZED = {
-    0,   // 0
-    18,  // 1
-    19,  // 2
-    1,   // 3
-    20,  // 4
-    21,  // 5
-    2,   // 6
-    22,  // 7
-    23,  // 8
-    3,   // 9
-    24,  // 10
-    25,  // 11
-    4,   // 12
-    10,  // 13
-    11,  // 14
-    5,   // 15
-    12,  // 16
-    13,  // 17
-    14,  // 18
-    15,  // 19
-    16,  // 20
-    17,  // 21
-    30,  // 22
-    31   // 23
+    0,  // 0
+    18, // 1
+    19, // 2
+    1,  // 3
+    20, // 4
+    21, // 5
+    2,  // 6
+    22, // 7
+    23, // 8
+    3,  // 9
+    24, // 10
+    25, // 11
+    4,  // 12
+    10, // 13
+    11, // 14
+    5,  // 15
+    12, // 16
+    13, // 17
+    14, // 18
+    15, // 19
+    16, // 20
+    17, // 21
+    30, // 22
+    31  // 23
 };
 
 // SMPL parents (standard 24-joint kinematic tree). -1 is root.
@@ -164,46 +164,40 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   return rvec;
 }
 
-std::vector<Body> extractBodyData(
-    const std::vector<sl::BodyData>& zed_bodies,
-    const std::array<int, 24>& SMPL_TO_ZED)
-{
-    std::vector<Body> bodies;
-    bodies.reserve(zed_bodies.size());
+std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
+                                  const std::array<int, 24> &SMPL_TO_ZED) {
+  std::vector<Body> bodies;
+  bodies.reserve(zed_bodies.size());
 
-    for (const auto& zed_body : zed_bodies) {
-        Body body;
+  for (const auto &zed_body : zed_bodies) {
+    Body body;
 
-        // Root
-        const auto& root = zed_body.keypoint[2];
-        body.root_position << root.x, root.y, root.z;
+    // Root
+    const auto &root = zed_body.keypoint[2];
+    body.root_position << root.x, root.y, root.z;
 
-        const auto& gro = zed_body.global_root_orientation;
-        body.global_orientation = Eigen::Quaterniond(
-            gro.w, gro.x, gro.y, gro.z);
+    const auto &gro = zed_body.global_root_orientation;
+    body.global_orientation = Eigen::Quaterniond(gro.w, gro.x, gro.y, gro.z);
 
-        // Local orientations
-        const auto& q = zed_body.local_orientation_per_joint;
-        for (int j = 1; j < 24; ++j) {
-            int zed_idx = SMPL_TO_ZED[j];
-            body.local_orient[j] = Eigen::Quaterniond(
-                q[zed_idx].w,
-                q[zed_idx].x,
-                q[zed_idx].y,
-                q[zed_idx].z);
-        }
-
-        // Keypoints
-        for (int j = 0; j < 24; ++j) {
-            int zed_idx = SMPL_TO_ZED[j];
-            const auto& kp = zed_body.keypoint[zed_idx];
-            body.keypoints[j] << kp.x, kp.y, kp.z;
-        }
-
-        bodies.emplace_back(std::move(body));
+    // Local orientations
+    const auto &q = zed_body.local_orientation_per_joint;
+    for (int j = 1; j < 24; ++j) {
+      int zed_idx = SMPL_TO_ZED[j];
+      body.local_orient[j] = Eigen::Quaterniond(q[zed_idx].w, q[zed_idx].x,
+                                                q[zed_idx].y, q[zed_idx].z);
     }
 
-    return bodies;
+    // Keypoints
+    for (int j = 0; j < 24; ++j) {
+      int zed_idx = SMPL_TO_ZED[j];
+      const auto &kp = zed_body.keypoint[zed_idx];
+      body.keypoints[j] << kp.x, kp.y, kp.z;
+    }
+
+    bodies.emplace_back(std::move(body));
+  }
+
+  return bodies;
 }
 
 // ---- Build SMPL message from ZED fused body and apply transforms ----
@@ -274,11 +268,14 @@ buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros,
 }
 
 // ---- Merge multiple point clouds into one ----
-inline std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
+inline std::vector<
+    std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
 mergePointClouds(
-    const std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>>
-        &pcs) {
-  std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> merged;
+    const std::vector<std::vector<
+        std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>> &pcs) {
+
+  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
+      merged;
 
   for (const auto &pc : pcs) {
     merged.insert(merged.end(), pc.begin(), pc.end());
@@ -353,79 +350,130 @@ static void broadcastStaticCameras(
   tf_broadcaster->sendTransform(t);
 }
 void save_ply(const std::string &filename,
-              std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> pc) {
-  std::ofstream obj_file(filename);
-  if (!obj_file.is_open()) {
+              const std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d,
+                                           Eigen::Vector3d>> &pc,
+              bool include_normals = false) {
+
+  std::ofstream ply_file(filename);
+  if (!ply_file.is_open()) {
     throw std::runtime_error("Could not open PLY file for writing.");
   }
-  obj_file << "ply\n";
-  obj_file << "format ascii 1.0\n";
-  obj_file << "element vertex " << pc.size() << "\n";
-  obj_file << "property float x\n";
-  obj_file << "property float y\n";
-  obj_file << "property float z\n";
-  obj_file << "property uchar red\n";
-  obj_file << "property uchar green\n";
-  obj_file << "property uchar blue\n";
-  obj_file << "end_header\n";
+
+  // Header
+  ply_file << "ply\n";
+  ply_file << "format ascii 1.0\n";
+  ply_file << "element vertex " << pc.size() << "\n";
+  ply_file << "property float x\n";
+  ply_file << "property float y\n";
+  ply_file << "property float z\n";
+  ply_file << "property uchar red\n";
+  ply_file << "property uchar green\n";
+  ply_file << "property uchar blue\n";
+  if (include_normals) {
+    ply_file << "property float nx\n";
+    ply_file << "property float ny\n";
+    ply_file << "property float nz\n";
+  }
+  ply_file << "end_header\n";
+
+  // Write points
   for (const auto &p : pc) {
-    const Eigen::Vector3d &pt = p.first;
-    const Eigen::Vector3d &col = p.second;
+    const Eigen::Vector3d &pt = std::get<0>(p);
+    const Eigen::Vector3d &col = std::get<1>(p);
+    const Eigen::Vector3d &normal = std::get<2>(p);
+
     uint8_t r =
         static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.x())) * 255.0);
     uint8_t g =
         static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.y())) * 255.0);
     uint8_t b =
         static_cast<uint8_t>(std::min(1.0, std::max(0.0, col.z())) * 255.0);
-    obj_file << pt.x() << " " << pt.y() << " " << pt.z() << " " << (int)r << " "
-             << (int)g << " " << (int)b << "\n";
+
+    ply_file << pt.x() << " " << pt.y() << " " << pt.z() << " "
+             << static_cast<int>(r) << " " << static_cast<int>(g) << " "
+             << static_cast<int>(b);
+
+    if (include_normals) {
+      ply_file << " " << normal.x() << " " << normal.y() << " " << normal.z();
+    }
+
+    ply_file << "\n";
   }
-  obj_file.close();
+
+  ply_file.close();
   std::cout << "Saved " << pc.size() << " points to " << filename << std::endl;
 }
 
 void publishMergedPointCloud(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
-    const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>
-        &merged_cloud,
-    const std::string &frame_id = "map") {
+    const std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d,
+                                 Eigen::Vector3d>> &merged_cloud,
+    const std::string &frame_id = "map", bool include_normals = false) {
+
   sensor_msgs::msg::PointCloud2 cloud_msg;
   cloud_msg.header.stamp = rclcpp::Clock().now();
   cloud_msg.header.frame_id = frame_id;
   cloud_msg.height = 1;
   cloud_msg.width = static_cast<uint32_t>(merged_cloud.size());
   cloud_msg.is_dense = true;
-  cloud_msg.point_step = 16; // 4 floats: x,y,z + rgb
+
+  // Determine point step: 4 floats for xyz+rgb, +3 floats if normals included
+  cloud_msg.point_step = 16; // xyz(12) + rgb(4)
+  if (include_normals)
+    cloud_msg.point_step += 12; // nx, ny, nz as floats
   cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width;
+
   cloud_msg.data.resize(cloud_msg.row_step);
 
   // Define fields
-  cloud_msg.fields.resize(4);
-  cloud_msg.fields[0].name = "x";
-  cloud_msg.fields[0].offset = 0;
-  cloud_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32;
-  cloud_msg.fields[0].count = 1;
-  cloud_msg.fields[1].name = "y";
-  cloud_msg.fields[1].offset = 4;
-  cloud_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32;
-  cloud_msg.fields[1].count = 1;
-  cloud_msg.fields[2].name = "z";
-  cloud_msg.fields[2].offset = 8;
-  cloud_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
-  cloud_msg.fields[2].count = 1;
-  cloud_msg.fields[3].name = "rgb";
-  cloud_msg.fields[3].offset = 12;
-  cloud_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
-  cloud_msg.fields[3].count = 1;
+  cloud_msg.fields.clear();
+  uint32_t offset = 0;
 
+  auto add_field = [&](const std::string &name) {
+    sensor_msgs::msg::PointField field;
+    field.name = name;
+    field.offset = offset;
+    field.datatype = sensor_msgs::msg::PointField::FLOAT32;
+    field.count = 1;
+    cloud_msg.fields.push_back(field);
+    offset += 4;
+  };
+
+  add_field("x");
+  add_field("y");
+  add_field("z");
+  add_field("rgb");
+
+  if (include_normals) {
+    add_field("normal_x");
+    add_field("normal_y");
+    add_field("normal_z");
+  }
+
+  // Iterators
   sensor_msgs::PointCloud2Iterator<float> iter_x(cloud_msg, "x");
   sensor_msgs::PointCloud2Iterator<float> iter_y(cloud_msg, "y");
   sensor_msgs::PointCloud2Iterator<float> iter_z(cloud_msg, "z");
   sensor_msgs::PointCloud2Iterator<float> iter_rgb(cloud_msg, "rgb");
 
+  sensor_msgs::PointCloud2Iterator<float> iter_nx(cloud_msg, "normal_x");
+  sensor_msgs::PointCloud2Iterator<float> iter_ny(cloud_msg, "normal_y");
+  sensor_msgs::PointCloud2Iterator<float> iter_nz(cloud_msg, "normal_z");
+
+  sensor_msgs::PointCloud2Iterator<float> *p_nx = nullptr;
+  sensor_msgs::PointCloud2Iterator<float> *p_ny = nullptr;
+  sensor_msgs::PointCloud2Iterator<float> *p_nz = nullptr;
+
+  if (include_normals) {
+    p_nx = new sensor_msgs::PointCloud2Iterator<float>(cloud_msg, "normal_x");
+    p_ny = new sensor_msgs::PointCloud2Iterator<float>(cloud_msg, "normal_y");
+    p_nz = new sensor_msgs::PointCloud2Iterator<float>(cloud_msg, "normal_z");
+  }
+
   for (const auto &p : merged_cloud) {
-    const Eigen::Vector3d &pt = p.first;
-    const Eigen::Vector3d &col = p.second;
+    const Eigen::Vector3d &pt = std::get<0>(p);
+    const Eigen::Vector3d &col = std::get<1>(p);
+    const Eigen::Vector3d &normal = std::get<2>(p);
 
     *iter_x = static_cast<float>(pt.x());
     *iter_y = static_cast<float>(pt.y());
@@ -442,6 +490,16 @@ void publishMergedPointCloud(
                     static_cast<uint32_t>(g) << 8 | static_cast<uint32_t>(b));
 
     *iter_rgb = *reinterpret_cast<float *>(&rgb);
+    
+    if (include_normals && p_nx && p_ny && p_nz) {
+      *(*p_nx) = static_cast<float>(normal.x());
+      *(*p_ny) = static_cast<float>(normal.y());
+      *(*p_nz) = static_cast<float>(normal.z());
+
+      ++(*p_nx);
+      ++(*p_ny);
+      ++(*p_nz);
+    }
 
     ++iter_x;
     ++iter_y;

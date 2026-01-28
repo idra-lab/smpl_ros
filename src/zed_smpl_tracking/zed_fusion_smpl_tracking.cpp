@@ -85,6 +85,8 @@ int main(int argc, char **argv) {
   node->declare_parameter<bool>("publish_image", false);
   node->declare_parameter<std::string>("point_cloud_output_file",
                                        "human_cloud.ply");
+  node->declare_parameter<double>("time_before_saving_pc",
+                                       5.0);
   node->declare_parameter<std::string>("smpl_params_file", "");
 
   std::string calib_file = node->get_parameter("calibration_file").as_string();
@@ -110,8 +112,10 @@ int main(int argc, char **argv) {
   }
   std::string pc_output_file =
       node->get_parameter("point_cloud_output_file").as_string();
-  RCLCPP_INFO(node->get_logger(), "Point cloud will be saved to: %s",
-              pc_output_file.c_str());
+  double time_before_saving_pc =
+      node->get_parameter("time_before_saving_pc").as_double();
+  RCLCPP_INFO(node->get_logger(), "Point cloud will be saved to: %s after %.2f seconds",
+              pc_output_file.c_str(), time_before_saving_pc);
 
   auto smpl_pub =
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
@@ -254,31 +258,32 @@ int main(int argc, char **argv) {
 
   auto time_now = std::chrono::high_resolution_clock::now();
   bool already_saved = false;
+  bool include_normals = true;
 
   SimpleTimer timer;
   // ------------------ Main loop ------------------
   while (rclcpp::ok()) {
     trigger.notifyZED();
     std::cout << "------------------ New Frame ------------------" << std::endl;
-
-    std::vector<std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>> pcs(
+    // points, colors, normals
+    std::vector<std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>> pcs(
         clients.size());
     if (publish_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
         pcs[i] = clients[i].getFilteredPointCloud(T_cams_extrinsics[i],
-                                                  yolo_net, yolov8Seg);
+                                                  yolo_net, yolov8Seg, include_normals);
       }
       auto merged_cloud = mergePointClouds(pcs);
-      publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf);
+      publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf, include_normals);
       // dump point cloud after 5 seconds
       if (!already_saved) {
         auto time_after = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                             time_after - time_now)
                             .count();
-        if (duration > 5.0) {
+        if (duration > time_before_saving_pc) {
           // create folder named as time
-          save_ply(pc_output_file, merged_cloud);
+          save_ply(pc_output_file, merged_cloud, include_normals);
           already_saved = true;
           RCLCPP_INFO(node->get_logger(), "Saved point cloud to %s",
                       pc_output_file.c_str());
@@ -330,7 +335,9 @@ int main(int argc, char **argv) {
       // Prepare per-camera BodyData vector
       for (size_t i = 0; i < cameras.size(); i++) {
         clients[i].zed.retrieveBodies(detected_bodies[i]);
-        timer.tok((std::string("Bodies retrieval time for camera ") + std::to_string(cam_ids[i])).c_str());
+        timer.tok((std::string("Bodies retrieval time for camera ") +
+                   std::to_string(cam_ids[i]))
+                      .c_str());
         if (detected_bodies[i].body_list.empty()) {
           continue;
         }

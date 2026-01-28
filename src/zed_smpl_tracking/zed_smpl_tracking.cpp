@@ -102,10 +102,11 @@ int main(int argc, char **argv) {
   while (rclcpp::ok()) {
     trigger.notifyZED();
     // Grab filtered point cloud (human only)
-    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> pc_data;
+    std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
+        pc_data;
     if (publish_human_point_cloud) {
-      pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(),
-                                             yolo_net, yolov8Seg);
+      pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(), yolo_net,
+                                            yolov8Seg, false);
       if (!pc_data.empty()) {
         publishMergedPointCloud(cloud_pub, pc_data, frame_id);
 
@@ -115,7 +116,7 @@ int main(int argc, char **argv) {
                 std::chrono::high_resolution_clock::now() - start_time)
                 .count();
         if (!cloud_saved && elapsed > 5) {
-          save_ply(pc_output_file, pc_data);
+          save_ply(pc_output_file, pc_data, false);
           RCLCPP_INFO(node->get_logger(), "Saved human point cloud to %s",
                       pc_output_file.c_str());
           cloud_saved = true;
@@ -150,17 +151,19 @@ int main(int argc, char **argv) {
         smpl_pub->publish(msg);
       }
     }
-    if (publish_point_cloud) {
-      auto points = client.extractPointCloudFast();
-      publishMergedPointCloud(cloud_pub, points, frame_id);
-    }
+    // TODO fix
+    // if (publish_point_cloud) {
+    //   auto points = client.extractPointCloudFast(false);
+    //   publishMergedPointCloud(cloud_pub, points, frame_id);
+    // }
   }
   trigger.running = false;
   trigger.notifyZED();
   // ------------------ Cleanup ------------------
   client.stop();
   exec.cancel();
-  if (ros_spin_thread.joinable()) ros_spin_thread.join();
+  if (ros_spin_thread.joinable())
+    ros_spin_thread.join();
   rclcpp::shutdown();
   return 0;
 }

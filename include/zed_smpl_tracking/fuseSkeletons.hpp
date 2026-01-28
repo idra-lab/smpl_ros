@@ -68,10 +68,6 @@ Body mergeBodiesWithExtrinsics(
     // Transform keypoints and orientations
     for (size_t j = 0; j < num_joints; j++) {
       body.keypoints[j] = transformPoint(body.keypoints[j], T);
-      RCLCPP_INFO(rclcpp::get_logger("BodyMerger"),
-                  "Before Transform Quaternion %f %f %f %f",
-                  body.local_orient[j].w(), body.local_orient[j].x(),
-                  body.local_orient[j].y(), body.local_orient[j].z());
       body.local_orient[j] = body.local_orient[j];
     }
 
