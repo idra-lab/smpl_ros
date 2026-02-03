@@ -1,0 +1,13 @@
+smpl_publisher_node:
+  ros__parameters:
+    calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/two_cams_fusion_config.json"
+    yolo_model_path: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/yolov8s-seg.onnx"
+    resolution: "1920x1080"
+    publish_point_cloud: false
+    publish_human_depth_map: false
+    publish_image: false
+    publish_body: false
+    visualize_image: true
+    point_cloud_output_file: "" # only if publish_point_cloud is true
+    time_before_saving_pc: 5.0
+    smpl_params_file: ""

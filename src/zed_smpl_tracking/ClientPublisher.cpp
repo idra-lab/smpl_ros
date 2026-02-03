@@ -5,8 +5,8 @@ ClientPublisher::ClientPublisher() {}
 ClientPublisher::~ClientPublisher() { zed.close(); }
 
 bool ClientPublisher::open(sl::InputType input,
-                           sl::COORDINATE_SYSTEM coord_system, Trigger *ref,
-                           int sdk_gpu_id) {
+                           sl::COORDINATE_SYSTEM coord_system, sl::RESOLUTION resolution,
+                           Trigger *ref, int sdk_gpu_id) {
   p_trigger = ref;
 
   sl::InitParameters init_parameters;
@@ -19,7 +19,7 @@ bool ClientPublisher::open(sl::InputType input,
   init_parameters.depth_maximum_distance = 4.0;
   // set ROS coordinate system
   init_parameters.coordinate_system = coord_system;
-  init_parameters.camera_resolution = sl::RESOLUTION::HD2K;
+  init_parameters.camera_resolution = resolution;
   //   init_parameters.reference_frame = sl::REFERENCE_FRAME::WORLD;
   auto state = zed.open(init_parameters);
   if (state != sl::ERROR_CODE::SUCCESS) {
@@ -79,7 +79,8 @@ void ClientPublisher::start() {
 }
 
 void ClientPublisher::stop() {
-  if (runner.joinable()) runner.join();
+  if (runner.joinable())
+    runner.join();
   zed.close();
 }
 
@@ -115,171 +116,185 @@ void ClientPublisher::setStartSVOPosition(unsigned pos) {
 
 std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
 ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
-                                       cv::dnn::Net &net,
-                                       Yolov8Seg &yolov8Seg,
+                                       cv::dnn::Net &net, Yolov8Seg &yolov8Seg,
                                        bool include_normals = false) {
-    std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>> points_colors_normals;
+  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
+      points_colors_normals;
 
-    // 1️⃣ Grab RGB image
-    sl::Mat sl_image;
-    if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
-        return points_colors_normals;
-    }
-
-    cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
-                    sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
-    cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
-
-    // 2️⃣ YOLO detection
-    std::vector<OutputParams> detections;
-    if (!yolov8Seg.Detect(cvImage, net, detections)) return points_colors_normals;
-
-    // 3️⃣ Pick first human detection
-    cv::Rect human_bbox;
-    cv::Mat human_mask;
-    for (auto &det : detections) {
-        if (det.id == 0) {  // person class
-            human_bbox = det.box;
-            human_mask = det.boxMask.clone();
-            break;
-        }
-    }
-
-    if (human_mask.empty()) return points_colors_normals;
-
-    // 4️⃣ Erode mask to clean edges
-    cv::erode(human_mask, human_mask,
-              cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
-
-    // 5️⃣ Grab ZED point cloud
-    sl::Mat pc_mat;
-    if (zed.retrieveMeasure(pc_mat, sl::MEASURE::XYZRGBA) != sl::ERROR_CODE::SUCCESS)
-        return points_colors_normals;
-
-    float* normal_ptr = nullptr;
-    sl::Mat normal_mat;
-    if (include_normals) {
-        if (zed.retrieveMeasure(normal_mat, sl::MEASURE::NORMALS) != sl::ERROR_CODE::SUCCESS)
-            include_normals = false;  // fallback
-        else
-            normal_ptr = normal_mat.getPtr<float>(sl::MEM::CPU);
-    }
-
-    int width = pc_mat.getWidth();
-    int height = pc_mat.getHeight();
-    float* pc_ptr = pc_mat.getPtr<float>(sl::MEM::CPU);
-
-    for (int y = human_bbox.y; y < human_bbox.y + human_bbox.height; y++) {
-        for (int x = human_bbox.x; x < human_bbox.x + human_bbox.width; x++) {
-            if (y >= height || x >= width) continue;
-
-            // Mask is relative to bbox
-            if (human_mask.at<uchar>(y - human_bbox.y, x - human_bbox.x) == 0) continue;
-
-            int idx = (y * width + x) * 4;
-            float X = pc_ptr[idx + 0];
-            float Y = pc_ptr[idx + 1];
-            float Z = pc_ptr[idx + 2];
-            float rgba_f = pc_ptr[idx + 3];
-
-            if (!std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z)) continue;
-
-            // Transform point to desired frame
-            Eigen::Vector4d pt(X, Y, Z, 1.0);
-            Eigen::Vector3d pt_transformed = (T * pt).head<3>();
-
-            // Extract RGB
-            uint32_t rgba = *reinterpret_cast<uint32_t*>(&rgba_f);
-            uint8_t r = (rgba >> 0) & 0xFF;
-            uint8_t g = (rgba >> 8) & 0xFF;
-            uint8_t b = (rgba >> 16) & 0xFF;
-            Eigen::Vector3d color(r / 255.0, g / 255.0, b / 255.0);
-
-            // Normals
-            Eigen::Vector3d n_transformed(0.0, 0.0, 0.0);
-            if (include_normals && normal_ptr != nullptr) {
-                float nx = normal_ptr[idx + 0];
-                float ny = normal_ptr[idx + 1];
-                float nz = normal_ptr[idx + 2];
-
-                if (std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz)) {
-                    Eigen::Vector4d n(nx, ny, nz, 0.0);  // w=0 for direction
-                    n_transformed = (T * n).head<3>().normalized();
-                }
-            }
-
-            points_colors_normals.emplace_back(pt_transformed, color, n_transformed);
-        }
-    }
-
+  // 1️⃣ Grab RGB image
+  sl::Mat sl_image;
+  if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
     return points_colors_normals;
+  }
+
+  cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
+                  sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+  cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+
+  // 2️⃣ YOLO detection
+  std::vector<OutputParams> detections;
+  if (!yolov8Seg.Detect(cvImage, net, detections))
+    return points_colors_normals;
+
+  // 3️⃣ Pick first human detection
+  cv::Rect human_bbox;
+  cv::Mat human_mask;
+  for (auto &det : detections) {
+    if (det.id == 0) { // person class
+      human_bbox = det.box;
+      human_mask = det.boxMask.clone();
+      break;
+    }
+  }
+
+  if (human_mask.empty())
+    return points_colors_normals;
+
+  // 4️⃣ Erode mask to clean edges
+  cv::erode(human_mask, human_mask,
+            cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
+
+  // 5️⃣ Grab ZED point cloud
+  sl::Mat pc_mat;
+  if (zed.retrieveMeasure(pc_mat, sl::MEASURE::XYZRGBA) !=
+      sl::ERROR_CODE::SUCCESS)
+    return points_colors_normals;
+
+  float *normal_ptr = nullptr;
+  sl::Mat normal_mat;
+  if (include_normals) {
+    if (zed.retrieveMeasure(normal_mat, sl::MEASURE::NORMALS) !=
+        sl::ERROR_CODE::SUCCESS)
+      include_normals = false; // fallback
+    else
+      normal_ptr = normal_mat.getPtr<float>(sl::MEM::CPU);
+  }
+
+  int width = pc_mat.getWidth();
+  int height = pc_mat.getHeight();
+  float *pc_ptr = pc_mat.getPtr<float>(sl::MEM::CPU);
+
+  for (int y = human_bbox.y; y < human_bbox.y + human_bbox.height; y++) {
+    for (int x = human_bbox.x; x < human_bbox.x + human_bbox.width; x++) {
+      if (y >= height || x >= width)
+        continue;
+
+      // Mask is relative to bbox
+      if (human_mask.at<uchar>(y - human_bbox.y, x - human_bbox.x) == 0)
+        continue;
+
+      int idx = (y * width + x) * 4;
+      float X = pc_ptr[idx + 0];
+      float Y = pc_ptr[idx + 1];
+      float Z = pc_ptr[idx + 2];
+      float rgba_f = pc_ptr[idx + 3];
+
+      if (!std::isfinite(X) || !std::isfinite(Y) || !std::isfinite(Z))
+        continue;
+
+      // Transform point to desired frame
+      Eigen::Vector4d pt(X, Y, Z, 1.0);
+      Eigen::Vector3d pt_transformed = (T * pt).head<3>();
+
+      // Extract RGB
+      uint32_t rgba = *reinterpret_cast<uint32_t *>(&rgba_f);
+      uint8_t r = (rgba >> 0) & 0xFF;
+      uint8_t g = (rgba >> 8) & 0xFF;
+      uint8_t b = (rgba >> 16) & 0xFF;
+      Eigen::Vector3d color(r / 255.0, g / 255.0, b / 255.0);
+
+      // Normals
+      Eigen::Vector3d n_transformed(0.0, 0.0, 0.0);
+      if (include_normals && normal_ptr != nullptr) {
+        float nx = normal_ptr[idx + 0];
+        float ny = normal_ptr[idx + 1];
+        float nz = normal_ptr[idx + 2];
+
+        if (std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz)) {
+          Eigen::Vector4d n(nx, ny, nz, 0.0); // w=0 for direction
+          n_transformed = (T * n).head<3>().normalized();
+        }
+      }
+
+      points_colors_normals.emplace_back(pt_transformed, color, n_transformed);
+    }
+  }
+
+  return points_colors_normals;
 }
 
-cv::Mat ClientPublisher::getFilteredDepthMap(cv::dnn::Net &net, Yolov8Seg &yolov8Seg) {
-    // 1️⃣ Grab RGB image
-    sl::Mat sl_image;
-    if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
-        return cv::Mat();
+cv::Mat ClientPublisher::getFilteredDepthMap(cv::dnn::Net &net,
+                                             Yolov8Seg &yolov8Seg) {
+  // 1️⃣ Grab RGB image
+  sl::Mat sl_image;
+  if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
+    return cv::Mat();
+  }
+
+  cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
+                  sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+  cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+
+  // 2️⃣ YOLO detection
+  std::vector<OutputParams> detections;
+  if (!yolov8Seg.Detect(cvImage, net, detections))
+    return cv::Mat();
+
+  // 3️⃣ Pick first human detection
+  cv::Rect human_bbox;
+  cv::Mat human_mask;
+  for (auto &det : detections) {
+    if (det.id == 0) { // person class
+      human_bbox = det.box;
+      human_mask = det.boxMask.clone();
+      break;
     }
+  }
 
-    cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
-                    sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
-    cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+  if (human_mask.empty())
+    return cv::Mat();
 
-    // 2️⃣ YOLO detection
-    std::vector<OutputParams> detections;
-    if (!yolov8Seg.Detect(cvImage, net, detections)) return cv::Mat();
+  // 4️⃣ Erode mask to clean edges
+  cv::erode(human_mask, human_mask,
+            cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
 
-    // 3️⃣ Pick first human detection
-    cv::Rect human_bbox;
-    cv::Mat human_mask;
-    for (auto &det : detections) {
-        if (det.id == 0) {  // person class
-            human_bbox = det.box;
-            human_mask = det.boxMask.clone();
-            break;
-        }
+  // 5️⃣ Grab ZED depth
+  sl::Mat depth_mat;
+  if (zed.retrieveMeasure(depth_mat, sl::MEASURE::DEPTH) !=
+      sl::ERROR_CODE::SUCCESS)
+    return cv::Mat();
+
+  int width = depth_mat.getWidth();
+  int height = depth_mat.getHeight();
+  cv::Mat depthMap(height, width, CV_32FC1,
+                   depth_mat.getPtr<float>(sl::MEM::CPU));
+
+  // 6️⃣ Initialize full-size filtered depth map
+  cv::Mat filteredDepth = cv::Mat::zeros(height, width, CV_32FC1);
+
+  // 7️⃣ Apply mask in full image coordinates
+  for (int y = 0; y < human_bbox.height; y++) {
+    for (int x = 0; x < human_bbox.width; x++) {
+      if (human_mask.at<uchar>(y, x) > 0) {
+        int globalY = human_bbox.y + y;
+        int globalX = human_bbox.x + x;
+        if (globalY < height && globalX < width)
+          filteredDepth.at<float>(globalY, globalX) =
+              depthMap.at<float>(globalY, globalX);
+      }
     }
+  }
 
-    if (human_mask.empty()) return cv::Mat();
-
-    // 4️⃣ Erode mask to clean edges
-    cv::erode(human_mask, human_mask,
-              cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
-
-    // 5️⃣ Grab ZED depth
-    sl::Mat depth_mat;
-    if (zed.retrieveMeasure(depth_mat, sl::MEASURE::DEPTH) != sl::ERROR_CODE::SUCCESS)
-        return cv::Mat();
-
-    int width = depth_mat.getWidth();
-    int height = depth_mat.getHeight();
-    cv::Mat depthMap(height, width, CV_32FC1, depth_mat.getPtr<float>(sl::MEM::CPU));
-
-    // 6️⃣ Initialize full-size filtered depth map
-    cv::Mat filteredDepth = cv::Mat::zeros(height, width, CV_32FC1);
-
-    // 7️⃣ Apply mask in full image coordinates
-    for (int y = 0; y < human_bbox.height; y++) {
-        for (int x = 0; x < human_bbox.width; x++) {
-            if (human_mask.at<uchar>(y, x) > 0) {
-                int globalY = human_bbox.y + y;
-                int globalX = human_bbox.x + x;
-                if (globalY < height && globalX < width)
-                    filteredDepth.at<float>(globalY, globalX) = depthMap.at<float>(globalY, globalX);
-            }
-        }
-    }
-
-    return filteredDepth;
+  return filteredDepth;
 }
 
 std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
 ClientPublisher::extractPointCloudFast(bool include_normals = false) {
-  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>> pc_data;
+  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
+      pc_data;
   // Try to grab a new frame
   if (zed.grab() != sl::ERROR_CODE::SUCCESS) {
-    return pc_data;  // No new frame available
+    return pc_data; // No new frame available
   }
 
   // Retrieve point cloud directly in CPU memory for fast access

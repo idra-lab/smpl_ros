@@ -158,7 +158,7 @@ ament_target_dependencies(zed_fusion_smpl_tracking
 install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking zed_fusion_smpl_tracking
   DESTINATION lib/${PROJECT_NAME}
 )
-install(DIRECTORY launch rviz
+install(DIRECTORY launch rviz config
   DESTINATION share/${PROJECT_NAME}
 )
 

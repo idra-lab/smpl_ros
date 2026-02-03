@@ -82,8 +82,8 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(), "Starting ZED SMPL tracking...");
   ClientPublisher client;
   Trigger trigger;
-  if (!client.open(sl::InputType(), sl::COORDINATE_SYSTEM::IMAGE, &trigger,
-                   0)) {
+  if (!client.open(sl::InputType(), sl::COORDINATE_SYSTEM::IMAGE,
+                   sl::RESOLUTION::HD2K, &trigger, 0)) {
     RCLCPP_ERROR(node->get_logger(), "Failed to open ZED camera");
     return 1;
   }
@@ -110,8 +110,8 @@ int main(int argc, char **argv) {
     std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
         pc_data;
     if (publish_human_point_cloud) {
-      pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(), yolo_net,
-                                            yolov8Seg, false);
+      pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(),
+                                             yolo_net, yolov8Seg, false);
       if (!pc_data.empty()) {
         publishMergedPointCloud(cloud_pub, pc_data, frame_id);
 

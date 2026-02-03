@@ -71,24 +71,36 @@ int main(int argc, char **argv) {
 
   // ------------------ Declare ROS2 Parameters ------------------
   node->declare_parameter<std::string>(
-      "calibration_file",
-      "/home/nardi/sensor_fusion_ws/smpl_ros_ws/calibrated_fusion_config.json");
+      "calibration_file","");
   node->declare_parameter<std::string>(
-      "yolo_model_path",
-      "/home/nardi/sensor_fusion_ws/smpl_ros_ws/yolov8s-seg.onnx");
+      "yolo_model_path","");
   auto tf_static_broadcaster_ =
       std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   // used only with fusion API
-  node->declare_parameter<int>("max_width", 1280);
-  node->declare_parameter<int>("max_height", 720);
-  node->declare_parameter<bool>("publish_point_cloud", true);
+
+  // Parameters declaration
+  node->declare_parameter<std::string>("resolution", "1920x1080");
+  node->declare_parameter<bool>("publish_point_cloud", false);
   node->declare_parameter<bool>("publish_human_depth_map", false);
   node->declare_parameter<bool>("publish_image", false);
+  node->declare_parameter<bool>("publish_body", false);
   node->declare_parameter<std::string>("point_cloud_output_file",
                                        "human_cloud.ply");
   node->declare_parameter<double>("time_before_saving_pc", 5.0);
   node->declare_parameter<std::string>("smpl_params_file", "");
+  node->declare_parameter<bool>("visualize_image", false);
 
+  // Print all declared parameters value
+  // RCLCPP_INFO(node->get_logger(), "Node parameters:");
+  // auto parameters = node->list_parameters({}, 10);
+  // for (const auto &param_name : parameters.names) {
+  //   auto param_value = node->get_parameter(param_name).as_string();
+  //   RCLCPP_INFO(node->get_logger(), "  %s: %s", param_name.c_str(),
+  //               param_value.c_str());
+  // }
+
+
+  // Parameters retrieval
   std::string calib_file = node->get_parameter("calibration_file").as_string();
   RCLCPP_INFO(node->get_logger(), "Using calibration file: %s",
               calib_file.c_str());
@@ -96,8 +108,7 @@ int main(int argc, char **argv) {
       node->get_parameter("yolo_model_path").as_string();
   RCLCPP_INFO(node->get_logger(), "Using YOLO model file: %s",
               yolo_model_path.c_str());
-  int max_width = node->get_parameter("max_width").as_int();
-  int max_height = node->get_parameter("max_height").as_int();
+  std::string resolution_str = node->get_parameter("resolution").as_string();
   bool publish_point_cloud =
       node->get_parameter("publish_point_cloud").as_bool();
   bool publish_human_depth_map =
@@ -105,6 +116,9 @@ int main(int argc, char **argv) {
   bool publish_image = node->get_parameter("publish_image").as_bool();
   std::string smpl_params_path =
       node->get_parameter("smpl_params_file").as_string();
+  bool publish_body = node->get_parameter("publish_body").as_bool();
+  bool visualize_image = node->get_parameter("visualize_image").as_bool();
+
   std::vector<double> betas(10, 0.0);
   if (smpl_params_path == "") {
     RCLCPP_INFO(node->get_logger(),
@@ -119,13 +133,23 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(),
               "Point cloud will be saved to: %s after %.2f seconds",
               pc_output_file.c_str(), time_before_saving_pc);
-
+  
+  // ------------------ ROS Publishers ------------------
   auto smpl_pub =
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
   auto cloud_pub =
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
-  auto image_pub =
-      node->create_publisher<sensor_msgs::msg::Image>("/camera1/image", 10);
+
+  std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> image_pubs;
+  if (publish_image) {
+    RCLCPP_INFO(node->get_logger(), "Image publishing enabled.");
+    // create one publisher per camera
+    for (int i = 0; i < 4; i++) {
+      auto pub = node->create_publisher<sensor_msgs::msg::Image>(
+          "/camera" + std::to_string(i + 1) + "/image", 10);
+      image_pubs.push_back(pub);
+    }
+  }
   auto depth_map_pub =
       node->create_publisher<sensor_msgs::msg::Image>("/human_depth_map", 10);
 
@@ -142,6 +166,32 @@ int main(int argc, char **argv) {
   // ------------------ ZED + SMPL Setup ------------------
   // calibration must be done in IMAGE frame but we want data in ROS frame ->
   // ZED automatically converts the read JSON extrinsics to ROS frame
+  int width =
+      std::stoi(resolution_str.substr(0, resolution_str.find("x")));
+  int height =
+      std::stoi(resolution_str.substr(resolution_str.find("x") + 1));
+  sl::RESOLUTION resolution;
+  switch(height) {
+    case 1242:
+      resolution = sl::RESOLUTION::HD2K;
+      break;
+    case 1536:
+      resolution = sl::RESOLUTION::HD1536;
+      break;
+    case 1080:
+      resolution = sl::RESOLUTION::HD1080;
+      break;
+    case 1200:
+      resolution = sl::RESOLUTION::HD1200;
+      break;
+    case 720:
+      resolution = sl::RESOLUTION::HD720;
+      break;
+    default:
+      RCLCPP_ERROR(node->get_logger(), "Unsupported resolution height: %d",
+                   height);
+      return EXIT_FAILURE;
+  }
   constexpr sl::COORDINATE_SYSTEM ROS_COORDINATE_SYSTEM =
       sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
   constexpr sl::UNIT UNIT = sl::UNIT::METER;
@@ -166,7 +216,7 @@ int main(int argc, char **argv) {
         sl::CommunicationParameters::COMM_TYPE::INTRA_PROCESS) {
       gpu_id = id_ % nb_gpu;
       if (!clients[id_].open(conf.input_type,
-                             sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD,
+                             sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD, resolution,
                              &trigger, gpu_id))
         continue;
       id_++;
@@ -181,8 +231,8 @@ int main(int argc, char **argv) {
   init_params.coordinate_units = UNIT;
   init_params.coordinate_system = ROS_COORDINATE_SYSTEM;
   init_params.verbose = true;
-  sl::Resolution resolution(max_width, max_height);
-  init_params.maximum_working_resolution = resolution;
+  init_params.maximum_working_resolution = sl::Resolution(std::max(1280, width),
+                                                         std::max(720, height));
 
   sl::Fusion fusion;
   fusion.init(init_params);
@@ -304,44 +354,62 @@ int main(int argc, char **argv) {
       }
     }
     // Publish RGB image if requested
-    if (publish_image) {
-      sl::Mat zed_image;
-      if (clients[0].zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
-          sl::ERROR_CODE::SUCCESS) {
-        cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
-                        zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
-        cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
-        publish_image_msg(image_pub, cvImage, cam1_tf);
+    if (publish_image || visualize_image) {
+      for (size_t i = 0; i < clients.size(); ++i) {
+
+        sl::Mat zed_image;
+        if (clients[i].zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
+            sl::ERROR_CODE::SUCCESS) {
+
+          cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
+                          zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+
+          cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+
+          if (publish_image) {
+            publish_image_msg(image_pubs[i], cvImage, cam1_tf);
+          }
+
+          if (visualize_image) {
+            cv::imshow(std::string("Camera ") + std::to_string(cam_ids[i]),
+                       cvImage);
+          }
+        }
+      }
+
+      if (visualize_image) {
+        cv::waitKey(1); // Call once per loop, not per camera
       }
     }
     Body fusedBody;
-    bool useFusionAPI = false;
-    if (useFusionAPI) {
-      // This produces a wrong result even though singular cameras have
-      // correct bodies
-      if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS) {
-        RCLCPP_WARN(node->get_logger(), "Fusion process failed");
-        continue;
-      }
-      if (fusion.retrieveBodies(fused_bodies,
-                                body_tracking_runtime_parameters) !=
-          sl::FUSION_ERROR_CODE::SUCCESS) {
-        RCLCPP_WARN(node->get_logger(), "Could not retrieve bodies");
-        continue;
-      }
-      if (fused_bodies.body_list.empty()) {
-        RCLCPP_WARN(node->get_logger(), "No bodies found");
-        continue;
-      }
-      raw_bodies_vector.push_back(fused_bodies.body_list[0]);
-      std::vector<Body> bodies =
-          extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
-      // bodies are already merged by the Fusion API
-      if (!raw_bodies_vector.empty()) {
-        fusedBody = bodies[0];
-      }
-    } else {
-      // timer.tik();
+    // bool useFusionAPI = false;
+    // if (useFusionAPI) {
+    //   // This produces a wrong result even though singular cameras have
+    //   // correct bodies
+    //   if (fusion.process() != sl::FUSION_ERROR_CODE::SUCCESS) {
+    //     RCLCPP_WARN(node->get_logger(), "Fusion process failed");
+    //     continue;
+    //   }
+    //   if (fusion.retrieveBodies(fused_bodies,
+    //                             body_tracking_runtime_parameters) !=
+    //       sl::FUSION_ERROR_CODE::SUCCESS) {
+    //     RCLCPP_WARN(node->get_logger(), "Could not retrieve bodies");
+    //     continue;
+    //   }
+    //   if (fused_bodies.body_list.empty()) {
+    //     RCLCPP_WARN(node->get_logger(), "No bodies found");
+    //     continue;
+    //   }
+    //   raw_bodies_vector.push_back(fused_bodies.body_list[0]);
+    //   std::vector<Body> bodies =
+    //       extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
+    //   // bodies are already merged by the Fusion API
+    //   if (!raw_bodies_vector.empty()) {
+    //     fusedBody = bodies[0];
+    //   }
+    // } else {
+    // timer.tik();
+    if (publish_body) {
       // Prepare per-camera BodyData vector
       for (size_t i = 0; i < cameras.size(); i++) {
         clients[i].zed.retrieveBodies(detected_bodies[i]);
@@ -369,14 +437,15 @@ int main(int argc, char **argv) {
         fusedBody = mergeBodiesWithExtrinsics(bodies, T_cams_extrinsics);
       }
       // timer.tok("Bodies merging time");
-    }
-    raw_bodies_vector.clear();
+      // }
+      raw_bodies_vector.clear();
 
-    // Build and publish SMPL message
-    auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
-    // timer.tok("SMPL message building time");
-    smpl_pub->publish(msg);
-    // timer.tok("SMPL message publishing time");
+      // Build and publish SMPL message
+      auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
+      // timer.tok("SMPL message building time");
+      smpl_pub->publish(msg);
+      // timer.tok("SMPL message publishing time");
+    }
   }
 
   // ------------------ Shutdown ------------------

@@ -41,8 +41,8 @@ public:
   ClientPublisher();
   ~ClientPublisher();
 
-  bool open(sl::InputType, sl::COORDINATE_SYSTEM coord_system, Trigger *ref,
-            int sdk_gpu_id);
+  bool open(sl::InputType, sl::COORDINATE_SYSTEM coord_system, sl::RESOLUTION resolution,
+            Trigger *ref, int sdk_gpu_id);
   void start();
   void stop();
   void setStartSVOPosition(unsigned pos);

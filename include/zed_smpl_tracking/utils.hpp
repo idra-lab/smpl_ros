@@ -122,6 +122,21 @@ std::vector<double> load_smpl_betas(const std::string &smpl_params_path) {
               betas_str.c_str());
   return betas;
 }
+
+sl::RESOLUTION resolutionToEnum(const sl::Resolution& res)
+{
+    if (res.width == 2208 && res.height == 1242)
+        return sl::RESOLUTION::HD2K;
+    else if (res.width == 1920 && res.height == 1080)
+        return sl::RESOLUTION::HD1080;
+    else if (res.width == 1280 && res.height == 720)
+        return sl::RESOLUTION::HD720;
+    else if (res.width == 672 && res.height == 376)
+        return sl::RESOLUTION::VGA;
+    else
+        throw std::runtime_error("Unsupported resolution");
+}
+
 // Converts quaternion to rotation vector (axis-angle)
 // The output rotation vector is in the range [-pi, pi]
 static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
