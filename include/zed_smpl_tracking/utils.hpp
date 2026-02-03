@@ -1,6 +1,7 @@
 #pragma once
 #include "bodyStruct.hpp"
 #include <Eigen/Dense>
+#include <cv_bridge/cv_bridge.h>
 #include <atomic>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <map>
@@ -508,4 +509,26 @@ void publishMergedPointCloud(
   }
 
   pub->publish(cloud_msg);
+}
+
+void publishFilteredDepthMap(
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub,
+    const cv::Mat &filtered_depth,
+    const std::string &frame_id = "map") {
+
+    if (filtered_depth.empty()) return;
+
+    auto msg = std::make_shared<sensor_msgs::msg::Image>();
+    msg->header.stamp = rclcpp::Clock().now();
+    msg->header.frame_id = frame_id;
+
+    // Convert cv::Mat to ROS Image message
+    cv_bridge::CvImage cv_image_msg;
+    cv_image_msg.header = msg->header;
+    cv_image_msg.encoding = "32FC1"; // float32 single channel
+    cv_image_msg.image = filtered_depth;
+
+    cv_image_msg.toImageMsg(*msg);
+
+    pub->publish(*msg);
 }

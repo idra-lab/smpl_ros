@@ -215,6 +215,65 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
     return points_colors_normals;
 }
 
+cv::Mat ClientPublisher::getFilteredDepthMap(cv::dnn::Net &net, Yolov8Seg &yolov8Seg) {
+    // 1️⃣ Grab RGB image
+    sl::Mat sl_image;
+    if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
+        return cv::Mat();
+    }
+
+    cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
+                    sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+    cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+
+    // 2️⃣ YOLO detection
+    std::vector<OutputParams> detections;
+    if (!yolov8Seg.Detect(cvImage, net, detections)) return cv::Mat();
+
+    // 3️⃣ Pick first human detection
+    cv::Rect human_bbox;
+    cv::Mat human_mask;
+    for (auto &det : detections) {
+        if (det.id == 0) {  // person class
+            human_bbox = det.box;
+            human_mask = det.boxMask.clone();
+            break;
+        }
+    }
+
+    if (human_mask.empty()) return cv::Mat();
+
+    // 4️⃣ Erode mask to clean edges
+    cv::erode(human_mask, human_mask,
+              cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
+
+    // 5️⃣ Grab ZED depth
+    sl::Mat depth_mat;
+    if (zed.retrieveMeasure(depth_mat, sl::MEASURE::DEPTH) != sl::ERROR_CODE::SUCCESS)
+        return cv::Mat();
+
+    int width = depth_mat.getWidth();
+    int height = depth_mat.getHeight();
+    cv::Mat depthMap(height, width, CV_32FC1, depth_mat.getPtr<float>(sl::MEM::CPU));
+
+    // 6️⃣ Initialize full-size filtered depth map
+    cv::Mat filteredDepth = cv::Mat::zeros(height, width, CV_32FC1);
+
+    // 7️⃣ Apply mask in full image coordinates
+    for (int y = 0; y < human_bbox.height; y++) {
+        for (int x = 0; x < human_bbox.width; x++) {
+            if (human_mask.at<uchar>(y, x) > 0) {
+                int globalY = human_bbox.y + y;
+                int globalX = human_bbox.x + x;
+                if (globalY < height && globalX < width)
+                    filteredDepth.at<float>(globalY, globalX) = depthMap.at<float>(globalY, globalX);
+            }
+        }
+    }
+
+    return filteredDepth;
+}
+
 std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
 ClientPublisher::extractPointCloudFast(bool include_normals = false) {
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>> pc_data;

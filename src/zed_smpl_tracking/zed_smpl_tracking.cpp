@@ -33,6 +33,7 @@ int main(int argc, char **argv) {
   node->declare_parameter<std::string>("yolo_model_path", "");
   node->declare_parameter<bool>("publish_point_cloud", true);
   node->declare_parameter<bool>("publish_human_point_cloud", true);
+  node->declare_parameter<bool>("publish_human_depth_map", false);
   node->declare_parameter<bool>("publish_image", true);
   node->declare_parameter<bool>("publish_human", true);
   node->declare_parameter<std::string>("point_cloud_output_file",
@@ -45,6 +46,8 @@ int main(int argc, char **argv) {
       node->get_parameter("publish_point_cloud").as_bool();
   bool publish_human_point_cloud =
       node->get_parameter("publish_human_point_cloud").as_bool();
+  bool publish_human_depth_map =
+      node->get_parameter("publish_human_depth_map").as_bool();
   bool publish_image = node->get_parameter("publish_image").as_bool();
   bool publish_human = node->get_parameter("publish_human").as_bool();
   std::string pc_output_file =
@@ -64,6 +67,8 @@ int main(int argc, char **argv) {
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
   auto image_pub =
       node->create_publisher<sensor_msgs::msg::Image>("/zed/image", 10);
+  auto depth_map_pub =
+      node->create_publisher<sensor_msgs::msg::Image>("/human_depth_map", 10);
 
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
@@ -123,7 +128,12 @@ int main(int argc, char **argv) {
         }
       }
     }
-
+    if (publish_human_depth_map) {
+      cv::Mat depth_map = client.getFilteredDepthMap(yolo_net, yolov8Seg);
+      if (!depth_map.empty()) {
+        publishFilteredDepthMap(depth_map_pub, depth_map, frame_id);
+      }
+    }
     // Publish RGB image if requested
     if (publish_image) {
       sl::Mat zed_image;

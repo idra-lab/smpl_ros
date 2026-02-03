@@ -82,11 +82,11 @@ int main(int argc, char **argv) {
   node->declare_parameter<int>("max_width", 1280);
   node->declare_parameter<int>("max_height", 720);
   node->declare_parameter<bool>("publish_point_cloud", true);
+  node->declare_parameter<bool>("publish_human_depth_map", false);
   node->declare_parameter<bool>("publish_image", false);
   node->declare_parameter<std::string>("point_cloud_output_file",
                                        "human_cloud.ply");
-  node->declare_parameter<double>("time_before_saving_pc",
-                                       5.0);
+  node->declare_parameter<double>("time_before_saving_pc", 5.0);
   node->declare_parameter<std::string>("smpl_params_file", "");
 
   std::string calib_file = node->get_parameter("calibration_file").as_string();
@@ -100,6 +100,8 @@ int main(int argc, char **argv) {
   int max_height = node->get_parameter("max_height").as_int();
   bool publish_point_cloud =
       node->get_parameter("publish_point_cloud").as_bool();
+  bool publish_human_depth_map =
+      node->get_parameter("publish_human_depth_map").as_bool();
   bool publish_image = node->get_parameter("publish_image").as_bool();
   std::string smpl_params_path =
       node->get_parameter("smpl_params_file").as_string();
@@ -114,7 +116,8 @@ int main(int argc, char **argv) {
       node->get_parameter("point_cloud_output_file").as_string();
   double time_before_saving_pc =
       node->get_parameter("time_before_saving_pc").as_double();
-  RCLCPP_INFO(node->get_logger(), "Point cloud will be saved to: %s after %.2f seconds",
+  RCLCPP_INFO(node->get_logger(),
+              "Point cloud will be saved to: %s after %.2f seconds",
               pc_output_file.c_str(), time_before_saving_pc);
 
   auto smpl_pub =
@@ -123,6 +126,8 @@ int main(int argc, char **argv) {
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
   auto image_pub =
       node->create_publisher<sensor_msgs::msg::Image>("/camera1/image", 10);
+  auto depth_map_pub =
+      node->create_publisher<sensor_msgs::msg::Image>("/human_depth_map", 10);
 
   // --- ROS spinning in background thread ---
   rclcpp::executors::SingleThreadedExecutor exec;
@@ -266,15 +271,17 @@ int main(int argc, char **argv) {
     trigger.notifyZED();
     std::cout << "------------------ New Frame ------------------" << std::endl;
     // points, colors, normals
-    std::vector<std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>> pcs(
-        clients.size());
+    std::vector<std::vector<
+        std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>>
+        pcs(clients.size());
     if (publish_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
-        pcs[i] = clients[i].getFilteredPointCloud(T_cams_extrinsics[i],
-                                                  yolo_net, yolov8Seg, include_normals);
+        pcs[i] = clients[i].getFilteredPointCloud(
+            T_cams_extrinsics[i], yolo_net, yolov8Seg, include_normals);
       }
       auto merged_cloud = mergePointClouds(pcs);
-      publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf, include_normals);
+      publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf,
+                              include_normals);
       // dump point cloud after 5 seconds
       if (!already_saved) {
         auto time_after = std::chrono::high_resolution_clock::now();
@@ -290,17 +297,20 @@ int main(int argc, char **argv) {
         }
       }
     }
+    if (publish_human_depth_map) {
+      cv::Mat depth_map = clients[0].getFilteredDepthMap(yolo_net, yolov8Seg);
+      if (!depth_map.empty()) {
+        publishFilteredDepthMap(depth_map_pub, depth_map, cam1_tf);
+      }
+    }
+    // Publish RGB image if requested
     if (publish_image) {
-      sl::Mat view;
-      if (clients[0].zed.retrieveImage(view, sl::VIEW::LEFT) ==
+      sl::Mat zed_image;
+      if (clients[0].zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
           sl::ERROR_CODE::SUCCESS) {
-        cv::Mat cvImageTemp(view.getHeight(), view.getWidth(),
-                            (view.getChannels() == 4) ? CV_8UC4 : CV_8UC1,
-                            view.getPtr<sl::uchar1>(sl::MEM::CPU));
-        cv::Mat cvImage = cvImageTemp.clone();
-        if (cvImage.channels() == 4) {
-          cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
-        }
+        cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
+                        zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+        cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
         publish_image_msg(image_pub, cvImage, cam1_tf);
       }
     }
@@ -331,13 +341,13 @@ int main(int argc, char **argv) {
         fusedBody = bodies[0];
       }
     } else {
-      timer.tik();
+      // timer.tik();
       // Prepare per-camera BodyData vector
       for (size_t i = 0; i < cameras.size(); i++) {
         clients[i].zed.retrieveBodies(detected_bodies[i]);
-        timer.tok((std::string("Bodies retrieval time for camera ") +
-                   std::to_string(cam_ids[i]))
-                      .c_str());
+        // timer.tok((std::string("Bodies retrieval time for camera ") +
+        //            std::to_string(cam_ids[i]))
+        //               .c_str());
         if (detected_bodies[i].body_list.empty()) {
           continue;
         }
@@ -353,20 +363,20 @@ int main(int argc, char **argv) {
       // struct
       std::vector<Body> bodies =
           extractBodyData(raw_bodies_vector, SMPL_TO_ZED);
-      timer.tok("Bodies extraction time");
+      // timer.tok("Bodies extraction time");
       // Merge the bodies into a single fused BodyData
       if (!raw_bodies_vector.empty()) {
         fusedBody = mergeBodiesWithExtrinsics(bodies, T_cams_extrinsics);
       }
-      timer.tok("Bodies merging time");
+      // timer.tok("Bodies merging time");
     }
     raw_bodies_vector.clear();
 
     // Build and publish SMPL message
     auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
-    timer.tok("SMPL message building time");
+    // timer.tok("SMPL message building time");
     smpl_pub->publish(msg);
-    timer.tok("SMPL message publishing time");
+    // timer.tok("SMPL message publishing time");
   }
 
   // ------------------ Shutdown ------------------
