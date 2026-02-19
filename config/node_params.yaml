@@ -12,6 +12,7 @@ smpl_publisher_node:
     published_body_filter_voxel_size: 0.02
     erode_body_mask_kernel_size: 5
     visualize_image: true
+    overlay_yolo_mask: false
     point_cloud_output_file: "" # only if publish_point_cloud is true
     time_before_saving_pc: 5.0
     smpl_params_file: ""
