@@ -18,6 +18,7 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "utils/json.hpp"
 #include "yolov8_seg.h"
+#include "utils/voxel_filter.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
 #include "zed_smpl_tracking/utils.hpp"
@@ -70,10 +71,8 @@ int main(int argc, char **argv) {
   auto node = rclcpp::Node::make_shared("smpl_publisher_node");
 
   // ------------------ Declare ROS2 Parameters ------------------
-  node->declare_parameter<std::string>(
-      "calibration_file","");
-  node->declare_parameter<std::string>(
-      "yolo_model_path","");
+  node->declare_parameter<std::string>("calibration_file", "");
+  node->declare_parameter<std::string>("yolo_model_path", "");
   auto tf_static_broadcaster_ =
       std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   // used only with fusion API
@@ -89,6 +88,8 @@ int main(int argc, char **argv) {
   node->declare_parameter<double>("time_before_saving_pc", 5.0);
   node->declare_parameter<std::string>("smpl_params_file", "");
   node->declare_parameter<bool>("visualize_image", false);
+  node->declare_parameter<int>("erode_body_mask_kernel_size", 5);
+  node->declare_parameter<double>("published_body_filter_voxel_size", 0.02);
 
   // Print all declared parameters value
   // RCLCPP_INFO(node->get_logger(), "Node parameters:");
@@ -98,7 +99,6 @@ int main(int argc, char **argv) {
   //   RCLCPP_INFO(node->get_logger(), "  %s: %s", param_name.c_str(),
   //               param_value.c_str());
   // }
-
 
   // Parameters retrieval
   std::string calib_file = node->get_parameter("calibration_file").as_string();
@@ -118,6 +118,10 @@ int main(int argc, char **argv) {
       node->get_parameter("smpl_params_file").as_string();
   bool publish_body = node->get_parameter("publish_body").as_bool();
   bool visualize_image = node->get_parameter("visualize_image").as_bool();
+  int erode_body_mask_kernel_size =
+      node->get_parameter("erode_body_mask_kernel_size").as_int();
+  double published_body_filter_voxel_size =
+      node->get_parameter("published_body_filter_voxel_size").as_double();
 
   std::vector<double> betas(10, 0.0);
   if (smpl_params_path == "") {
@@ -133,7 +137,7 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(),
               "Point cloud will be saved to: %s after %.2f seconds",
               pc_output_file.c_str(), time_before_saving_pc);
-  
+
   // ------------------ ROS Publishers ------------------
   auto smpl_pub =
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
@@ -166,31 +170,32 @@ int main(int argc, char **argv) {
   // ------------------ ZED + SMPL Setup ------------------
   // calibration must be done in IMAGE frame but we want data in ROS frame ->
   // ZED automatically converts the read JSON extrinsics to ROS frame
-  int width =
-      std::stoi(resolution_str.substr(0, resolution_str.find("x")));
-  int height =
-      std::stoi(resolution_str.substr(resolution_str.find("x") + 1));
+  int width = std::stoi(resolution_str.substr(0, resolution_str.find("x")));
+  int height = std::stoi(resolution_str.substr(resolution_str.find("x") + 1));
   sl::RESOLUTION resolution;
-  switch(height) {
-    case 1242:
-      resolution = sl::RESOLUTION::HD2K;
-      break;
-    case 1536:
-      resolution = sl::RESOLUTION::HD1536;
-      break;
-    case 1080:
-      resolution = sl::RESOLUTION::HD1080;
-      break;
-    case 1200:
-      resolution = sl::RESOLUTION::HD1200;
-      break;
-    case 720:
-      resolution = sl::RESOLUTION::HD720;
-      break;
-    default:
-      RCLCPP_ERROR(node->get_logger(), "Unsupported resolution height: %d",
-                   height);
-      return EXIT_FAILURE;
+  switch (height) {
+  case 1242:
+    resolution = sl::RESOLUTION::HD2K;
+    break;
+  case 1536:
+    resolution = sl::RESOLUTION::HD1536;
+    break;
+  case 1080:
+    resolution = sl::RESOLUTION::HD1080;
+    break;
+  case 1200:
+    resolution = sl::RESOLUTION::HD1200;
+    break;
+  case 720:
+    resolution = sl::RESOLUTION::HD720;
+    break;
+  case 376:
+    resolution = sl::RESOLUTION::VGA;
+    break;
+  default:
+    RCLCPP_ERROR(node->get_logger(), "Unsupported resolution height: %d",
+                 height);
+    return EXIT_FAILURE;
   }
   constexpr sl::COORDINATE_SYSTEM ROS_COORDINATE_SYSTEM =
       sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD;
@@ -216,8 +221,8 @@ int main(int argc, char **argv) {
         sl::CommunicationParameters::COMM_TYPE::INTRA_PROCESS) {
       gpu_id = id_ % nb_gpu;
       if (!clients[id_].open(conf.input_type,
-                             sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD, resolution,
-                             &trigger, gpu_id))
+                             sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD,
+                             resolution, &trigger, gpu_id))
         continue;
       id_++;
     }
@@ -231,8 +236,8 @@ int main(int argc, char **argv) {
   init_params.coordinate_units = UNIT;
   init_params.coordinate_system = ROS_COORDINATE_SYSTEM;
   init_params.verbose = true;
-  init_params.maximum_working_resolution = sl::Resolution(std::max(1280, width),
-                                                         std::max(720, height));
+  init_params.maximum_working_resolution =
+      sl::Resolution(std::max(1280, width), std::max(720, height));
 
   sl::Fusion fusion;
   fusion.init(init_params);
@@ -326,8 +331,12 @@ int main(int argc, char **argv) {
         pcs(clients.size());
     if (publish_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
-        pcs[i] = clients[i].getFilteredPointCloud(
-            T_cams_extrinsics[i], yolo_net, yolov8Seg, include_normals);
+        // get points, colors and normals
+        auto pcn = clients[i].getFilteredPointCloud(
+            T_cams_extrinsics[i], yolo_net, yolov8Seg, include_normals,
+            erode_body_mask_kernel_size);
+        pcn = voxelDownsample(pcn, published_body_filter_voxel_size);
+        pcs[i] = pcn;
       }
       auto merged_cloud = mergePointClouds(pcs);
       publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf,
@@ -340,10 +349,12 @@ int main(int argc, char **argv) {
                             .count();
         if (duration > time_before_saving_pc) {
           // create folder named as time
-          save_ply(pc_output_file, merged_cloud, include_normals);
-          already_saved = true;
-          RCLCPP_INFO(node->get_logger(), "Saved point cloud to %s",
-                      pc_output_file.c_str());
+          if (pc_output_file != "") {
+            save_ply(pc_output_file, merged_cloud, include_normals);
+            already_saved = true;
+            RCLCPP_INFO(node->get_logger(), "Saved point cloud to %s",
+                        pc_output_file.c_str());
+          }
         }
       }
     }

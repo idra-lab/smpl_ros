@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
         pc_data;
     if (publish_human_point_cloud) {
       pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(),
-                                             yolo_net, yolov8Seg, false);
+                                             yolo_net, yolov8Seg, false, 5);
       if (!pc_data.empty()) {
         publishMergedPointCloud(cloud_pub, pc_data, frame_id);
 

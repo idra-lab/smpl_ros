@@ -44,7 +44,7 @@ Body mergeBodiesWithExtrinsics(
     const std::vector<Eigen::Matrix4d> &T_cams_extrinsics) {
   Body merged;
 
-  if (bodies.empty() || bodies.size() != T_cams_extrinsics.size()){
+  if (bodies.empty()){ // || bodies.size() != T_cams_extrinsics.size()){
     RCLCPP_WARN(rclcpp::get_logger("BodyMerger"),
                 "No bodies to merge or size mismatch!");
     return merged;

@@ -61,7 +61,7 @@ public:
 
     // Subscribe to custom SMPL message
     subscriber_ = this->create_subscription<smpl_msgs::msg::Smpl>(
-        "/smpl_params", 10,
+        "/estimated_model", 10,
         std::bind(&SMPLVisualizerNode::smplCallback, this,
                   std::placeholders::_1));
     smpl_keypoints_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>(
@@ -74,11 +74,10 @@ private:
     for (int i = 0; i < 69; ++i) {
       body_pose_.index_put_({0, i}, static_cast<double>(msg->body_pose[i]));
     }
-
     // No Copy translation -> apply offset between pelvis instead
-    // for (int i = 0; i < 3; ++i) {
-    //   transl_.index_put_({0, i}, static_cast<double>(msg->transl[i]));
-    // }
+    for (int i = 0; i < 3; ++i) {
+      transl_.index_put_({0, i}, static_cast<double>(msg->transl[i]));
+    }
 
     // Copy global orientation
     for (int i = 0; i < 3; ++i) {
@@ -111,33 +110,33 @@ private:
     //                                    << ", " << msg->keypoints[1] << ", "
     //                                    << msg->keypoints[2]);
     // Compute offset between SMPL pelvis and skeleton tracker pelvis
-    auto offset = torch::zeros({3}, torch::kFloat64).to(device_);
-    offset.index_put_({0}, static_cast<double>(msg->keypoints[0]) -
-                               pelvis[0].item<double>());
-    offset.index_put_({1}, static_cast<double>(msg->keypoints[1]) -
-                               pelvis[1].item<double>());
-    offset.index_put_({2}, static_cast<double>(msg->keypoints[2]) -
-                               pelvis[2].item<double>());
+    // auto offset = torch::zeros({3}, torch::kFloat64).to(device_);
+    // offset.index_put_({0}, static_cast<double>(msg->keypoints[0]) -
+    //                            pelvis[0].item<double>());
+    // offset.index_put_({1}, static_cast<double>(msg->keypoints[1]) -
+    //                            pelvis[1].item<double>());
+    // offset.index_put_({2}, static_cast<double>(msg->keypoints[2]) -
+    //                            pelvis[2].item<double>());
     // Apply offset to translation
-    smpl_vertices += offset;
+    // smpl_vertices += offset;
 
     // extract keypoints and publish as PoseArray
-    geometry_msgs::msg::PoseArray keypoints_msg;
-    keypoints_msg.header.stamp = msg->header.stamp;
-    keypoints_msg.header.frame_id = frame_id_;
-    for (int i = 0; i < 24; ++i) {
-      geometry_msgs::msg::Pose pose;
-      auto joint = joints.index({i, Slice()});
-      pose.position.x = static_cast<double>(joint[0].item<double>() +
-                                            offset[0].item<double>());
-      pose.position.y = static_cast<double>(joint[1].item<double>() +
-                                            offset[1].item<double>());
-      pose.position.z = static_cast<double>(joint[2].item<double>() +
-                                            offset[2].item<double>());
-      pose.orientation.w = 1.0; // No orientation information
-      keypoints_msg.poses.push_back(pose);
-    }
-    smpl_keypoints_pub_->publish(keypoints_msg);
+    // geometry_msgs::msg::PoseArray keypoints_msg;
+    // keypoints_msg.header.stamp = msg->header.stamp;
+    // keypoints_msg.header.frame_id = frame_id_;
+    // for (int i = 0; i < 24; ++i) {
+    //   geometry_msgs::msg::Pose pose;
+    //   auto joint = joints.index({i, Slice()});
+    //   pose.position.x = static_cast<double>(joint[0].item<double>() +
+    //                                         offset[0].item<double>());
+    //   pose.position.y = static_cast<double>(joint[1].item<double>() +
+    //                                         offset[1].item<double>());
+    //   pose.position.z = static_cast<double>(joint[2].item<double>() +
+    //                                         offset[2].item<double>());
+    //   pose.orientation.w = 1.0; // No orientation information
+    //   keypoints_msg.poses.push_back(pose);
+    // }
+    // smpl_keypoints_pub_->publish(keypoints_msg);
 
     // --- Transform to ROS axes ---
     smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_);

@@ -5,8 +5,9 @@ ClientPublisher::ClientPublisher() {}
 ClientPublisher::~ClientPublisher() { zed.close(); }
 
 bool ClientPublisher::open(sl::InputType input,
-                           sl::COORDINATE_SYSTEM coord_system, sl::RESOLUTION resolution,
-                           Trigger *ref, int sdk_gpu_id) {
+                           sl::COORDINATE_SYSTEM coord_system,
+                           sl::RESOLUTION resolution, Trigger *ref,
+                           int sdk_gpu_id) {
   p_trigger = ref;
 
   sl::InitParameters init_parameters;
@@ -117,7 +118,8 @@ void ClientPublisher::setStartSVOPosition(unsigned pos) {
 std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
 ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
                                        cv::dnn::Net &net, Yolov8Seg &yolov8Seg,
-                                       bool include_normals = false) {
+                                       bool include_normals = false,
+                                       int erode_kernel_size = 5) {
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
       points_colors_normals;
 
@@ -152,7 +154,7 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
 
   // 4️⃣ Erode mask to clean edges
   cv::erode(human_mask, human_mask,
-            cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
+            cv::getStructuringElement(cv::MORPH_RECT, cv::Size(erode_kernel_size, erode_kernel_size)));
 
   // 5️⃣ Grab ZED point cloud
   sl::Mat pc_mat;

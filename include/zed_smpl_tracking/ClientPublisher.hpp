@@ -49,7 +49,7 @@ public:
 
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   getFilteredPointCloud(const Eigen::Matrix4d &T, cv::dnn::Net &net,
-                        Yolov8Seg &yolov8Seg, bool include_normals);
+                        Yolov8Seg &yolov8Seg, bool include_normals, int erode_kernel_size);
   cv::Mat getFilteredDepthMap(cv::dnn::Net &net, Yolov8Seg &yolov8Seg);
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   extractPointCloudFast(bool include_normals);

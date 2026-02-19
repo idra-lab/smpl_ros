@@ -25,6 +25,7 @@ inline Eigen::Matrix4d ros_to_image_transform() {
   T.block<3, 3>(0, 0) << 0, 0, 1, -1, 0, 0, 0, -1, 0;
   return T;
 }
+
 // ---- SMPL -> ZED mapping
 static constexpr std::array<int, 24> SMPL_TO_ZED = {
     0,  // 0
