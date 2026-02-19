@@ -65,6 +65,60 @@ void publish_image_msg(
   image_pub->publish(*image_msg);
 }
 
+cv::Mat overlayBestPersonMask(const cv::Mat &image,
+                             cv::dnn::Net &yolo_net,
+                             Yolov8Seg &yolov8Seg) {
+  cv::Mat output = image.clone();
+  if (output.empty()) {
+    return output;
+  }
+
+  std::vector<OutputParams> detections;
+  if (!yolov8Seg.Detect(output, yolo_net, detections)) {
+    return output;
+  }
+
+  float best_confidence = -1.0f;
+  cv::Rect best_bbox;
+  cv::Mat best_mask;
+  for (const auto &det : detections) {
+    if (det.id != 0 || det.boxMask.empty()) {
+      continue;
+    }
+    if (det.confidence > best_confidence) {
+      best_confidence = det.confidence;
+      best_bbox = det.box;
+      best_mask = det.boxMask;
+    }
+  }
+
+  if (best_mask.empty()) {
+    return output;
+  }
+
+  cv::Rect image_bounds(0, 0, output.cols, output.rows);
+  cv::Rect clipped_bbox = best_bbox & image_bounds;
+  if (clipped_bbox.width <= 0 || clipped_bbox.height <= 0) {
+    return output;
+  }
+
+  int mask_x = clipped_bbox.x - best_bbox.x;
+  int mask_y = clipped_bbox.y - best_bbox.y;
+  cv::Rect mask_roi(mask_x, mask_y, clipped_bbox.width, clipped_bbox.height);
+  if (mask_roi.x < 0 || mask_roi.y < 0 ||
+      mask_roi.x + mask_roi.width > best_mask.cols ||
+      mask_roi.y + mask_roi.height > best_mask.rows) {
+    return output;
+  }
+
+  cv::Mat roi = output(clipped_bbox);
+  cv::Mat roi_overlay = roi.clone();
+  roi_overlay.setTo(cv::Scalar(0, 0, 255), best_mask(mask_roi));
+  constexpr double alpha = 0.4;
+  cv::addWeighted(roi_overlay, alpha, roi, 1.0 - alpha, 0.0, roi);
+  return output;
+}
+
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
 
@@ -88,6 +142,7 @@ int main(int argc, char **argv) {
   node->declare_parameter<double>("time_before_saving_pc", 5.0);
   node->declare_parameter<std::string>("smpl_params_file", "");
   node->declare_parameter<bool>("visualize_image", false);
+  node->declare_parameter<bool>("overlay_yolo_mask", false);
   node->declare_parameter<int>("erode_body_mask_kernel_size", 5);
   node->declare_parameter<double>("published_body_filter_voxel_size", 0.02);
 
@@ -118,6 +173,7 @@ int main(int argc, char **argv) {
       node->get_parameter("smpl_params_file").as_string();
   bool publish_body = node->get_parameter("publish_body").as_bool();
   bool visualize_image = node->get_parameter("visualize_image").as_bool();
+  bool overlay_yolo_mask = node->get_parameter("overlay_yolo_mask").as_bool();
   int erode_body_mask_kernel_size =
       node->get_parameter("erode_body_mask_kernel_size").as_int();
   double published_body_filter_voxel_size =
@@ -309,7 +365,11 @@ int main(int argc, char **argv) {
 
   Yolov8Seg yolov8Seg;
   cv::dnn::Net yolo_net;
-  if (publish_point_cloud) {
+  if (publish_point_cloud || overlay_yolo_mask) {
+    if (yolo_model_path.empty()) {
+      RCLCPP_WARN(node->get_logger(),
+                  "overlay_yolo_mask or publish_point_cloud is enabled but yolo_model_path is empty.");
+    }
     yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
   }
 
@@ -377,13 +437,18 @@ int main(int argc, char **argv) {
 
           cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
 
+          cv::Mat displayed_image = cvImage;
+          if (overlay_yolo_mask && !yolo_model_path.empty()) {
+            displayed_image = overlayBestPersonMask(cvImage, yolo_net, yolov8Seg);
+          }
+
           if (publish_image) {
-            publish_image_msg(image_pubs[i], cvImage, cam1_tf);
+            publish_image_msg(image_pubs[i], displayed_image, cam1_tf);
           }
 
           if (visualize_image) {
             cv::imshow(std::string("Camera ") + std::to_string(cam_ids[i]),
-                       cvImage);
+                       displayed_image);
           }
         }
       }
