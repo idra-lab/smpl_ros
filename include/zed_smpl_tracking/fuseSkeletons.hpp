@@ -1,10 +1,8 @@
 #include "bodyStruct.hpp"
 #include <Eigen/Dense>
 #include <iostream>
-#include <rclcpp/rclcpp.hpp>
 #include <sl/Camera.hpp>
 #include <vector>
-#include <rclcpp/rclcpp.hpp>
 // --- Quaternion averaging using SVD ---
 Eigen::Quaterniond
 averageQuaternionsSVD(const std::vector<Eigen::Quaterniond> &quats) {
@@ -45,8 +43,7 @@ Body mergeBodiesWithExtrinsics(
   Body merged;
 
   if (bodies.empty()){ // || bodies.size() != T_cams_extrinsics.size()){
-    RCLCPP_WARN(rclcpp::get_logger("BodyMerger"),
-                "No bodies to merge or size mismatch!");
+    std::cerr << "Warning: No valid bodies to merge or size mismatch with extrinsics. Returning empty Body." << std::endl;  
     return merged;
   }
 

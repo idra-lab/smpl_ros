@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <thread>
@@ -17,107 +18,14 @@
 #include "smpl_msgs/msg/smpl.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "utils/json.hpp"
-#include "yolov8_seg.h"
 #include "utils/voxel_filter.h"
+#include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
+#include "zed_smpl_tracking/bodyConverter.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
 #include "zed_smpl_tracking/utils.hpp"
 
-// Simple Timer Class for measuring elapsed time
-class SimpleTimer {
-public:
-  void tik() {
-    last_ = clock::now();
-    running_ = true;
-  }
-
-  void tok(const char *label = "Elapsed") {
-    if (!running_)
-      return;
-
-    auto now = clock::now();
-    auto elapsed =
-        std::chrono::duration<double, std::milli>(now - last_).count();
-
-    std::cout << label << ": " << elapsed << " ms\n";
-
-    // reset per la prossima misura
-    last_ = now;
-  }
-
-private:
-  using clock = std::chrono::steady_clock;
-  clock::time_point last_;
-  bool running_ = false;
-};
-
-void publish_image_msg(
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub,
-    const cv::Mat &image, const std::string &frame_id) {
-  std_msgs::msg::Header header;
-  header.stamp = rclcpp::Clock().now();
-  header.frame_id = frame_id;
-  // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Publishing image with %d
-  // channels",
-  //             image.channels());
-  // cv::cvtColor(image, image, cv::COLOR_BGRA2RGBA);
-  auto image_msg = cv_bridge::CvImage(header, "bgr8", image).toImageMsg();
-  image_pub->publish(*image_msg);
-}
-
-cv::Mat overlayBestPersonMask(const cv::Mat &image,
-                             cv::dnn::Net &yolo_net,
-                             Yolov8Seg &yolov8Seg) {
-  cv::Mat output = image.clone();
-  if (output.empty()) {
-    return output;
-  }
-
-  std::vector<OutputParams> detections;
-  if (!yolov8Seg.Detect(output, yolo_net, detections)) {
-    return output;
-  }
-
-  float best_confidence = -1.0f;
-  cv::Rect best_bbox;
-  cv::Mat best_mask;
-  for (const auto &det : detections) {
-    if (det.id != 0 || det.boxMask.empty()) {
-      continue;
-    }
-    if (det.confidence > best_confidence) {
-      best_confidence = det.confidence;
-      best_bbox = det.box;
-      best_mask = det.boxMask;
-    }
-  }
-
-  if (best_mask.empty()) {
-    return output;
-  }
-
-  cv::Rect image_bounds(0, 0, output.cols, output.rows);
-  cv::Rect clipped_bbox = best_bbox & image_bounds;
-  if (clipped_bbox.width <= 0 || clipped_bbox.height <= 0) {
-    return output;
-  }
-
-  int mask_x = clipped_bbox.x - best_bbox.x;
-  int mask_y = clipped_bbox.y - best_bbox.y;
-  cv::Rect mask_roi(mask_x, mask_y, clipped_bbox.width, clipped_bbox.height);
-  if (mask_roi.x < 0 || mask_roi.y < 0 ||
-      mask_roi.x + mask_roi.width > best_mask.cols ||
-      mask_roi.y + mask_roi.height > best_mask.rows) {
-    return output;
-  }
-
-  cv::Mat roi = output(clipped_bbox);
-  cv::Mat roi_overlay = roi.clone();
-  roi_overlay.setTo(cv::Scalar(0, 0, 255), best_mask(mask_roi));
-  constexpr double alpha = 0.4;
-  cv::addWeighted(roi_overlay, alpha, roi, 1.0 - alpha, 0.0, roi);
-  return output;
-}
+#include "utils/constants.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -133,7 +41,8 @@ int main(int argc, char **argv) {
 
   // Parameters declaration
   node->declare_parameter<std::string>("resolution", "1920x1080");
-  node->declare_parameter<bool>("publish_point_cloud", false);
+  node->declare_parameter<bool>("publish_merged_point_cloud", false);
+  node->declare_parameter<bool>("publish_separate_point_clouds", false);
   node->declare_parameter<bool>("publish_human_depth_map", false);
   node->declare_parameter<bool>("publish_image", false);
   node->declare_parameter<bool>("publish_body", false);
@@ -164,8 +73,8 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(), "Using YOLO model file: %s",
               yolo_model_path.c_str());
   std::string resolution_str = node->get_parameter("resolution").as_string();
-  bool publish_point_cloud =
-      node->get_parameter("publish_point_cloud").as_bool();
+  bool publish_merged_point_cloud =
+      node->get_parameter("publish_merged_point_cloud").as_bool();
   bool publish_human_depth_map =
       node->get_parameter("publish_human_depth_map").as_bool();
   bool publish_image = node->get_parameter("publish_image").as_bool();
@@ -178,8 +87,10 @@ int main(int argc, char **argv) {
       node->get_parameter("erode_body_mask_kernel_size").as_int();
   double published_body_filter_voxel_size =
       node->get_parameter("published_body_filter_voxel_size").as_double();
+  bool publish_separate_point_clouds =
+      node->get_parameter("publish_separate_point_clouds").as_bool();
 
-  std::vector<double> betas(10, 0.0);
+  std::vector<double> betas(300, 0.0);
   if (smpl_params_path == "") {
     RCLCPP_INFO(node->get_logger(),
                 "No .json params file specified: SMPL betas set to zero");
@@ -199,7 +110,7 @@ int main(int argc, char **argv) {
       node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
   auto cloud_pub =
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
-
+  // Image publisher (for visualization/debugging)
   std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> image_pubs;
   if (publish_image) {
     RCLCPP_INFO(node->get_logger(), "Image publishing enabled.");
@@ -210,18 +121,6 @@ int main(int argc, char **argv) {
       image_pubs.push_back(pub);
     }
   }
-  auto depth_map_pub =
-      node->create_publisher<sensor_msgs::msg::Image>("/human_depth_map", 10);
-
-  // --- ROS spinning in background thread ---
-  rclcpp::executors::SingleThreadedExecutor exec;
-  exec.add_node(node);
-  std::atomic<bool> exec_running{true};
-  std::thread ros_spin_thread([&]() {
-    exec.spin();
-    exec_running = false;
-  });
-  RCLCPP_INFO(node->get_logger(), "ROS spinning thread started.");
 
   // ------------------ ZED + SMPL Setup ------------------
   // calibration must be done in IMAGE frame but we want data in ROS frame ->
@@ -314,6 +213,8 @@ int main(int argc, char **argv) {
       cameras.push_back(uuid);
     cam_ids.push_back(conf.serial_number);
   }
+  std::vector<std::string> cam_frames;
+
   for (int i = 0; i < clients.size(); i++) {
     auto cam_info = clients[i]
                         .zed.getCameraInformation()
@@ -329,13 +230,71 @@ int main(int argc, char **argv) {
                                                << conf.serial_number
                                                << ": Extrinsics matrix:\n"
                                                << T_cams_extrinsics[i]);
+    std::string frame_name = "cam" + std::to_string(i + 1) + "_" +
+                             std::to_string(conf.serial_number);
+    cam_frames.push_back(frame_name);
   }
-  std::string cam1_sn = std::to_string(cam_ids[0]);
-  std::string cam1_tf = "cam1_" + cam1_sn;
-  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics, cam_ids,
-                         cam1_tf);
+  // ------------------  Per-camera publishers ------------------
+  rclcpp::QoS camera_info_qos(1);
+  camera_info_qos.reliable();
+  camera_info_qos.transient_local();
+  std::vector<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr>
+      cam_info_pubs;
 
-  // Ensure that fusion poses are set
+  for (int i = 0; i < clients.size(); i++) {
+    auto pub = node->create_publisher<sensor_msgs::msg::CameraInfo>(
+        cam_frames[i] + "/camera_info", camera_info_qos);
+
+    cam_info_pubs.push_back(pub);
+
+    publishCameraInfo(pub, clients[i].zed, node->now(), cam_frames[i], width,
+                      height);
+  }
+
+  std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr>
+      per_cam_cloud_pubs;
+
+  if (publish_separate_point_clouds) {
+    RCLCPP_INFO(node->get_logger(),
+                "Per-camera point cloud publishing enabled.");
+    // Create one publisher per camera
+    for (size_t i = 0; i < cam_ids.size(); ++i) {
+      std::string topic = cam_frames[i] + "/point_cloud";
+      auto pub =
+          node->create_publisher<sensor_msgs::msg::PointCloud2>(topic, 10);
+      per_cam_cloud_pubs.push_back(pub);
+      RCLCPP_INFO(node->get_logger(), "PointCloud topic: %s", topic.c_str());
+    }
+  }
+
+  // --- ROS spinning in background thread ---
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node);
+  std::atomic<bool> exec_running{true};
+  std::thread ros_spin_thread([&]() {
+    exec.spin();
+    exec_running = false;
+  });
+  RCLCPP_INFO(node->get_logger(), "ROS spinning thread started.");
+
+  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics, cam_frames,
+                         cam_frames[0]);
+
+  RCLCPP_INFO(node->get_logger(),
+              "Published static TFs for cameras with frames: , parent frame: ");
+
+  // Create depthmap publishers using cam ids in the topic name
+  std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> depth_pubs;
+  if (publish_human_depth_map) {
+    RCLCPP_INFO(node->get_logger(), "Depth map publishing enabled.");
+    for (size_t i = 0; i < cam_frames.size(); ++i) {
+      std::string topic = cam_frames[i] + "/depth";
+      auto pub = node->create_publisher<sensor_msgs::msg::Image>(topic, 10);
+      depth_pubs.push_back(pub);
+
+      RCLCPP_INFO(node->get_logger(), "Depth topic: %s", topic.c_str());
+    }
+  }
 
   if (cameras.empty()) {
     RCLCPP_ERROR(node->get_logger(), "No cameras connected!");
@@ -365,10 +324,12 @@ int main(int argc, char **argv) {
 
   Yolov8Seg yolov8Seg;
   cv::dnn::Net yolo_net;
-  if (publish_point_cloud || overlay_yolo_mask) {
+  if (publish_merged_point_cloud || overlay_yolo_mask) {
     if (yolo_model_path.empty()) {
-      RCLCPP_WARN(node->get_logger(),
-                  "overlay_yolo_mask or publish_point_cloud is enabled but yolo_model_path is empty.");
+      RCLCPP_WARN(
+          node->get_logger(),
+          "overlay_yolo_mask or publish_merged_point_cloud is enabled but "
+          "yolo_model_path is empty.");
     }
     yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
   }
@@ -389,7 +350,7 @@ int main(int argc, char **argv) {
     std::vector<std::vector<
         std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>>
         pcs(clients.size());
-    if (publish_point_cloud) {
+    if (publish_merged_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
         // get points, colors and normals
         auto pcn = clients[i].getFilteredPointCloud(
@@ -399,8 +360,8 @@ int main(int argc, char **argv) {
         pcs[i] = pcn;
       }
       auto merged_cloud = mergePointClouds(pcs);
-      publishMergedPointCloud(cloud_pub, merged_cloud, cam1_tf,
-                              include_normals);
+      publishPointCloud(cloud_pub, merged_cloud, cam_frames[0],
+                        include_normals);
       // dump point cloud after 5 seconds
       if (!already_saved) {
         auto time_after = std::chrono::high_resolution_clock::now();
@@ -418,10 +379,31 @@ int main(int argc, char **argv) {
         }
       }
     }
+    if (publish_separate_point_clouds) {
+      // publish pc on separate topics
+      auto identity = Eigen::Matrix4d::Identity();
+      for (int i = 0; i < cameras.size(); i++) {
+        auto pcn = clients[i].getFilteredPointCloud(
+            identity, yolo_net, yolov8Seg, include_normals,
+            erode_body_mask_kernel_size);
+        publishPointCloud(per_cam_cloud_pubs[i], pcn, cam_frames[i],
+                          include_normals);
+      }
+    }
     if (publish_human_depth_map) {
-      cv::Mat depth_map = clients[0].getFilteredDepthMap(yolo_net, yolov8Seg);
-      if (!depth_map.empty()) {
-        publishFilteredDepthMap(depth_map_pub, depth_map, cam1_tf);
+      for (size_t i = 0; i < clients.size(); ++i) {
+
+        cv::Mat depth_map = clients[i].getFilteredDepthMap(yolo_net, yolov8Seg);
+        if (depth_map.empty()) {
+          RCLCPP_WARN(node->get_logger(),
+                      "Empty depth map for camera %d, skipping depth "
+                      "publishing for this frame.",
+                      cam_ids[i]);
+          continue;
+        }
+        // continue;
+
+        publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i]);
       }
     }
     // Publish RGB image if requested
@@ -439,11 +421,12 @@ int main(int argc, char **argv) {
 
           cv::Mat displayed_image = cvImage;
           if (overlay_yolo_mask && !yolo_model_path.empty()) {
-            displayed_image = overlayBestPersonMask(cvImage, yolo_net, yolov8Seg);
+            displayed_image =
+                clients[i].overlayBestPersonMask(cvImage, yolo_net, yolov8Seg);
           }
 
           if (publish_image) {
-            publish_image_msg(image_pubs[i], displayed_image, cam1_tf);
+            publish_image_msg(image_pubs[i], displayed_image, cam_frames[i]);
           }
 
           if (visualize_image) {

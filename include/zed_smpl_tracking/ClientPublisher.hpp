@@ -1,14 +1,14 @@
 #ifndef __SENDER_RUNNER_HDR__
 #define __SENDER_RUNNER_HDR__
 
+#include "bodyStruct.hpp"
+#include "yolov8_seg.h"
 #include <Eigen/Dense>
 #include <condition_variable>
 #include <opencv2/dnn.hpp>
 #include <sl/Camera.hpp>
 #include <sl/Fusion.hpp>
 #include <thread>
-
-#include "yolov8_seg.h"
 
 struct Trigger {
   void notifyZED() {
@@ -41,18 +41,21 @@ public:
   ClientPublisher();
   ~ClientPublisher();
 
-  bool open(sl::InputType, sl::COORDINATE_SYSTEM coord_system, sl::RESOLUTION resolution,
-            Trigger *ref, int sdk_gpu_id);
+  bool open(sl::InputType, sl::COORDINATE_SYSTEM coord_system,
+            sl::RESOLUTION resolution, Trigger *ref, int sdk_gpu_id);
   void start();
   void stop();
   void setStartSVOPosition(unsigned pos);
 
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   getFilteredPointCloud(const Eigen::Matrix4d &T, cv::dnn::Net &net,
-                        Yolov8Seg &yolov8Seg, bool include_normals, int erode_kernel_size);
+                        Yolov8Seg &yolov8Seg, bool include_normals,
+                        int erode_kernel_size);
   cv::Mat getFilteredDepthMap(cv::dnn::Net &net, Yolov8Seg &yolov8Seg);
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   extractPointCloudFast(bool include_normals);
+  cv::Mat overlayBestPersonMask(const cv::Mat &image, cv::dnn::Net &yolo_net,
+                                Yolov8Seg &yolov8Seg);
 
 private:
   void work();
