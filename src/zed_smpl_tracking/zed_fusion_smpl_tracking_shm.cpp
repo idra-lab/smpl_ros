@@ -5,9 +5,6 @@
  *   /zed_pointclouds  → point cloud per camera  (vedi SHMPCHeader/SHMPCSlot)
  *   /zed_smpl         → parametri SMPL          (vedi
  * SHMSMPLHeader/SHMSMPLSlot)
- *
- * Build:  stessi include/libs del nodo ROS, togliendo
- * rclcpp/sensor_msgs/cv_bridge. Aggiungere:  -lrt  (per shm_open)
  */
 
 #include <Eigen/Dense>
