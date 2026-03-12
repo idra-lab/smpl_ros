@@ -52,6 +52,11 @@ add_executable(zed_fusion_smpl_tracking
   src/zed_smpl_tracking/zed_fusion_smpl_tracking.cpp
   src/zed_smpl_tracking/ClientPublisher.cpp
 )
+add_executable(zed_fusion_smpl_tracking_shm
+  src/zed_smpl_tracking/zed_fusion_smpl_tracking_shm.cpp
+  src/zed_smpl_tracking/ClientPublisher.cpp
+)
+
 
 # Fitting SMPL
 target_include_directories(fitting_smpl PRIVATE
@@ -102,14 +107,10 @@ target_link_libraries(zed_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LI
 # ZED SMPL Tracking
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${CUDA_INCLUDE_DIRS})
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${ZED_INCLUDE_DIRS})
-target_include_directories(zed_fusion_smpl_tracking PUBLIC ${GLEW_INCLUDE_DIRS})
-target_include_directories(zed_fusion_smpl_tracking PUBLIC ${GLUT_INCLUDE_DIR})
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${OpenCV_INCLUDE_DIRS})
 link_directories(zed_fusion_smpl_tracking ${ZED_LIBRARY_DIR})
 link_directories(zed_fusion_smpl_tracking ${CUDA_LIBRARY_DIRS})
-link_directories(zed_fusion_smpl_tracking ${GLEW_LIBRARY_DIRS})
-link_directories(zed_fusion_smpl_tracking ${GLUT_LIBRARY_DIRS})
 link_directories(zed_fusion_smpl_tracking ${OpenGL_LIBRARY_DIRS})
 link_directories(zed_fusion_smpl_tracking ${OpenCV_LIBRARY_DIRS})
 target_link_libraries(zed_fusion_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
@@ -118,6 +119,24 @@ target_link_libraries(zed_fusion_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIA
   torchure_smplx::smplx
   ${TORCH_LIBRARIES}
 )
+
+target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${CUDA_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${ZED_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${OpenCV_INCLUDE_DIRS})
+link_directories(zed_fusion_smpl_tracking_shm ${ZED_LIBRARY_DIR})
+link_directories(zed_fusion_smpl_tracking_shm ${CUDA_LIBRARY_DIRS})
+link_directories(zed_fusion_smpl_tracking_shm ${OpenGL_LIBRARY_DIRS})
+link_directories(zed_fusion_smpl_tracking_shm ${OpenCV_LIBRARY_DIRS})
+target_link_libraries(zed_fusion_smpl_tracking_shm ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
+  Eigen3::Eigen
+  yolov8
+  torchure_smplx::smplx
+  ${TORCH_LIBRARIES}
+)
+
+
+
 
 ament_target_dependencies(fitting_smpl
   rclcpp
@@ -155,7 +174,7 @@ ament_target_dependencies(zed_fusion_smpl_tracking
 )
 
 # Install
-install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking zed_fusion_smpl_tracking
+install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking zed_fusion_smpl_tracking zed_fusion_smpl_tracking_shm
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch rviz config

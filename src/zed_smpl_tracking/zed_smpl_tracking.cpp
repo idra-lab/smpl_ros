@@ -14,16 +14,7 @@
 #include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/utils.hpp"
-// Helper to publish OpenCV images
-void publish_image_msg(
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub,
-    const cv::Mat &image, const std::string &frame_id) {
-  std_msgs::msg::Header header;
-  header.stamp = rclcpp::Clock().now();
-  header.frame_id = frame_id;
-  auto image_msg = cv_bridge::CvImage(header, "bgr8", image).toImageMsg();
-  image_pub->publish(*image_msg);
-}
+#include "zed_smpl_tracking/bodyConverter.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -113,7 +104,7 @@ int main(int argc, char **argv) {
       pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(),
                                              yolo_net, yolov8Seg, false, 5);
       if (!pc_data.empty()) {
-        publishMergedPointCloud(cloud_pub, pc_data, frame_id);
+        publishPointCloud(cloud_pub, pc_data, frame_id);
 
         // Save point cloud after 5 seconds
         auto elapsed =
@@ -131,7 +122,7 @@ int main(int argc, char **argv) {
     if (publish_human_depth_map) {
       cv::Mat depth_map = client.getFilteredDepthMap(yolo_net, yolov8Seg);
       if (!depth_map.empty()) {
-        publishFilteredDepthMap(depth_map_pub, depth_map, frame_id);
+        publish_depth_msg(depth_map_pub, depth_map, frame_id);
       }
     }
     // Publish RGB image if requested

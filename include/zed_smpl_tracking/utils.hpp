@@ -1,88 +1,22 @@
 #pragma once
 #include "bodyStruct.hpp"
 #include <Eigen/Dense>
-#include <cv_bridge/cv_bridge.h>
 #include <atomic>
+#include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <map>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <sl/Camera.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <thread>
 #include <vector>
+#include "utils/constants.hpp"
+
 #define NUM_BETAS 10
-// SMPL to ROS homogenous transformation of coordinates
-inline Eigen::Matrix4d smpl_to_ros_transform() {
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T.block<3, 3>(0, 0) << 0, 1, 0, 0, 0, 1, 1, 0, 0;
-  return T;
-}
-inline Eigen::Matrix4d ros_to_image_transform() {
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T.block<3, 3>(0, 0) << 0, 0, 1, -1, 0, 0, 0, -1, 0;
-  return T;
-}
-
-// ---- SMPL -> ZED mapping
-static constexpr std::array<int, 24> SMPL_TO_ZED = {
-    0,  // 0
-    18, // 1
-    19, // 2
-    1,  // 3
-    20, // 4
-    21, // 5
-    2,  // 6
-    22, // 7
-    23, // 8
-    3,  // 9
-    24, // 10
-    25, // 11
-    4,  // 12
-    10, // 13
-    11, // 14
-    5,  // 15
-    12, // 16
-    13, // 17
-    14, // 18
-    15, // 19
-    16, // 20
-    17, // 21
-    30, // 22
-    31  // 23
-};
-
-// SMPL parents (standard 24-joint kinematic tree). -1 is root.
-static const int SMPL_PARENTS[24] = {
-    -1,
-    0,  // 1
-    0,  // 2
-    0,  // 3
-    1,  // 4
-    2,  // 5
-    3,  // 6
-    4,  // 7
-    5,  // 8
-    6,  // 9
-    7,  // 10
-    8,  // 11
-    9,  // 12
-    9,  // 13
-    9,  // 14
-    12, // 15
-    13, // 16
-    14, // 17
-    16, // 18
-    17, // 19
-    18, // 20
-    19, // 21
-    20, // 22
-    21  // 23
-};
-// load json with betas
-
 std::vector<double> load_smpl_betas(const std::string &smpl_params_path) {
   std::ifstream smpl_file(smpl_params_path);
   if (!smpl_file.is_open()) {
@@ -124,18 +58,17 @@ std::vector<double> load_smpl_betas(const std::string &smpl_params_path) {
   return betas;
 }
 
-sl::RESOLUTION resolutionToEnum(const sl::Resolution& res)
-{
-    if (res.width == 2208 && res.height == 1242)
-        return sl::RESOLUTION::HD2K;
-    else if (res.width == 1920 && res.height == 1080)
-        return sl::RESOLUTION::HD1080;
-    else if (res.width == 1280 && res.height == 720)
-        return sl::RESOLUTION::HD720;
-    else if (res.width == 672 && res.height == 376)
-        return sl::RESOLUTION::VGA;
-    else
-        throw std::runtime_error("Unsupported resolution");
+sl::RESOLUTION resolutionToEnum(const sl::Resolution &res) {
+  if (res.width == 2208 && res.height == 1242)
+    return sl::RESOLUTION::HD2K;
+  else if (res.width == 1920 && res.height == 1080)
+    return sl::RESOLUTION::HD1080;
+  else if (res.width == 1280 && res.height == 720)
+    return sl::RESOLUTION::HD720;
+  else if (res.width == 672 && res.height == 376)
+    return sl::RESOLUTION::VGA;
+  else
+    throw std::runtime_error("Unsupported resolution");
 }
 
 // Converts quaternion to rotation vector (axis-angle)
@@ -181,41 +114,7 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   return rvec;
 }
 
-std::vector<Body> extractBodyData(const std::vector<sl::BodyData> &zed_bodies,
-                                  const std::array<int, 24> &SMPL_TO_ZED) {
-  std::vector<Body> bodies;
-  bodies.reserve(zed_bodies.size());
 
-  for (const auto &zed_body : zed_bodies) {
-    Body body;
-
-    // Root
-    const auto &root = zed_body.keypoint[2];
-    body.root_position << root.x, root.y, root.z;
-
-    const auto &gro = zed_body.global_root_orientation;
-    body.global_orientation = Eigen::Quaterniond(gro.w, gro.x, gro.y, gro.z);
-
-    // Local orientations
-    const auto &q = zed_body.local_orientation_per_joint;
-    for (int j = 1; j < 24; ++j) {
-      int zed_idx = SMPL_TO_ZED[j];
-      body.local_orient[j] = Eigen::Quaterniond(q[zed_idx].w, q[zed_idx].x,
-                                                q[zed_idx].y, q[zed_idx].z);
-    }
-
-    // Keypoints
-    for (int j = 0; j < 24; ++j) {
-      int zed_idx = SMPL_TO_ZED[j];
-      const auto &kp = zed_body.keypoint[zed_idx];
-      body.keypoints[j] << kp.x, kp.y, kp.z;
-    }
-
-    bodies.emplace_back(std::move(body));
-  }
-
-  return bodies;
-}
 
 // ---- Build SMPL message from ZED fused body and apply transforms ----
 inline smpl_msgs::msg::Smpl
@@ -321,17 +220,16 @@ Eigen::Matrix4d slTransformToEigen(const sl::Transform &T) {
 static void broadcastStaticCameras(
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster,
     const std::vector<Eigen::Matrix4d> &T_cams_extrinsics,
-    std::vector<int> cam_ids, const std::string &parent_frame = "map") {
+    const std::vector<std::string> &cam_frames,
+    const std::string &parent_frame = "map") {
 
   int i = 0;
   for (const auto &T : T_cams_extrinsics) {
-    std::string sn = std::to_string(cam_ids[i]);
-    i++;
     // create transform message
     geometry_msgs::msg::TransformStamped t;
     t.header.stamp = rclcpp::Clock().now();
     t.header.frame_id = parent_frame;
-    t.child_frame_id = "cam" + std::to_string(i) + "_" + sn;
+    t.child_frame_id = cam_frames[i];
 
     // translation
     t.transform.translation.x = T(0, 3);
@@ -347,9 +245,9 @@ static void broadcastStaticCameras(
 
     // send immediately
     tf_broadcaster->sendTransform(t);
+    i++;
   }
 
-  // also create a cam0_sn_image frame for robot calibration
   geometry_msgs::msg::TransformStamped t;
   t.header.stamp = rclcpp::Clock().now();
   t.header.frame_id = parent_frame + "_image";
@@ -421,17 +319,17 @@ void save_ply(const std::string &filename,
   std::cout << "Saved " << pc.size() << " points to " << filename << std::endl;
 }
 
-void publishMergedPointCloud(
+void publishPointCloud(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub,
-    const std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d,
-                                 Eigen::Vector3d>> &merged_cloud,
+    const std::vector<
+        std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>> &cloud,
     const std::string &frame_id = "map", bool include_normals = false) {
 
   sensor_msgs::msg::PointCloud2 cloud_msg;
   cloud_msg.header.stamp = rclcpp::Clock().now();
   cloud_msg.header.frame_id = frame_id;
   cloud_msg.height = 1;
-  cloud_msg.width = static_cast<uint32_t>(merged_cloud.size());
+  cloud_msg.width = static_cast<uint32_t>(cloud.size());
   cloud_msg.is_dense = true;
 
   // Determine point step: 4 floats for xyz+rgb, +3 floats if normals included
@@ -487,7 +385,7 @@ void publishMergedPointCloud(
     p_nz = new sensor_msgs::PointCloud2Iterator<float>(cloud_msg, "normal_z");
   }
 
-  for (const auto &p : merged_cloud) {
+  for (const auto &p : cloud) {
     const Eigen::Vector3d &pt = std::get<0>(p);
     const Eigen::Vector3d &col = std::get<1>(p);
     const Eigen::Vector3d &normal = std::get<2>(p);
@@ -507,7 +405,7 @@ void publishMergedPointCloud(
                     static_cast<uint32_t>(g) << 8 | static_cast<uint32_t>(b));
 
     *iter_rgb = *reinterpret_cast<float *>(&rgb);
-    
+
     if (include_normals && p_nx && p_ny && p_nz) {
       *(*p_nx) = static_cast<float>(normal.x());
       *(*p_ny) = static_cast<float>(normal.y());
@@ -527,24 +425,123 @@ void publishMergedPointCloud(
   pub->publish(cloud_msg);
 }
 
-void publishFilteredDepthMap(
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub,
-    const cv::Mat &filtered_depth,
-    const std::string &frame_id = "map") {
-
-    if (filtered_depth.empty()) return;
-
-    auto msg = std::make_shared<sensor_msgs::msg::Image>();
-    msg->header.stamp = rclcpp::Clock().now();
-    msg->header.frame_id = frame_id;
-
-    // Convert cv::Mat to ROS Image message
-    cv_bridge::CvImage cv_image_msg;
-    cv_image_msg.header = msg->header;
-    cv_image_msg.encoding = "32FC1"; // float32 single channel
-    cv_image_msg.image = filtered_depth;
-
-    cv_image_msg.toImageMsg(*msg);
-
-    pub->publish(*msg);
+void publish_image_msg(
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub,
+    const cv::Mat &image, const std::string &frame_id) {
+  std_msgs::msg::Header header;
+  header.stamp = rclcpp::Clock().now();
+  header.frame_id = frame_id;
+  // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Publishing image with %d
+  // channels",
+  //             image.channels());
+  // cv::cvtColor(image, image, cv::COLOR_BGRA2RGBA);
+  auto image_msg = cv_bridge::CvImage(header, "bgr8", image).toImageMsg();
+  image_pub->publish(*image_msg);
 }
+
+void publish_depth_msg(
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub,
+    const cv::Mat &depth, const std::string &frame_id) {
+
+  if (depth.empty())
+    return;
+
+  std_msgs::msg::Header header;
+  header.stamp = rclcpp::Clock().now();
+  header.frame_id = frame_id;
+
+  std::string encoding;
+
+  if (depth.type() == CV_32FC1)
+    encoding = "32FC1";
+  else if (depth.type() == CV_16UC1)
+    encoding = "16UC1";
+  else {
+    RCLCPP_WARN(rclcpp::get_logger("depth_pub"), "Unsupported depth type");
+    return;
+  }
+
+  auto msg = cv_bridge::CvImage(header, encoding, depth).toImageMsg();
+  depth_pub->publish(*msg);
+}
+
+// Simple Timer Class for measuring elapsed time
+class SimpleTimer {
+public:
+  void tik() {
+    last_ = clock::now();
+    running_ = true;
+  }
+
+  void tok(const char *label = "Elapsed") {
+    if (!running_)
+      return;
+
+    auto now = clock::now();
+    auto elapsed =
+        std::chrono::duration<double, std::milli>(now - last_).count();
+
+    std::cout << label << ": " << elapsed << " ms\n";
+
+    // reset per la prossima misura
+    last_ = now;
+  }
+
+private:
+  using clock = std::chrono::steady_clock;
+  clock::time_point last_;
+  bool running_ = false;
+};
+
+void publishCameraInfo(
+    const rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr &pub,
+    sl::Camera &zed, const rclcpp::Time &stamp, const std::string &frame_id,
+    int width, int height) {
+  auto cam_params =
+      zed.getCameraInformation().camera_configuration.calibration_parameters;
+
+  sensor_msgs::msg::CameraInfo msg;
+
+  msg.header.stamp = stamp;
+  msg.header.frame_id = frame_id;
+
+  msg.width = width;
+  msg.height = height;
+
+  // ---- Intrinsics (K) ----
+  msg.k = {cam_params.left_cam.fx,
+           0.0,
+           cam_params.left_cam.cx,
+           0.0,
+           cam_params.left_cam.fy,
+           cam_params.left_cam.cy,
+           0.0,
+           0.0,
+           1.0};
+
+  // ---- Rectification (R) ----
+  msg.r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+
+  // ---- Projection (P) ----
+  msg.p = {cam_params.left_cam.fx,
+           0.0,
+           cam_params.left_cam.cx,
+           0.0,
+           0.0,
+           cam_params.left_cam.fy,
+           cam_params.left_cam.cy,
+           0.0,
+           0.0,
+           0.0,
+           1.0,
+           0.0};
+
+  // ---- Distortion ----
+  msg.distortion_model = "plumb_bob";
+  msg.d = {cam_params.left_cam.disto[0], cam_params.left_cam.disto[1],
+           cam_params.left_cam.disto[2], cam_params.left_cam.disto[3],
+           cam_params.left_cam.disto[4]};
+
+  pub->publish(msg);
+}
+

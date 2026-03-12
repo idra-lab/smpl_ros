@@ -123,7 +123,7 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
       points_colors_normals;
 
-  // 1️⃣ Grab RGB image
+  // Grab RGB image
   sl::Mat sl_image;
   if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
     return points_colors_normals;
@@ -133,12 +133,12 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
                   sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
   cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
 
-  // 2️⃣ YOLO detection
+  // YOLO detection
   std::vector<OutputParams> detections;
   if (!yolov8Seg.Detect(cvImage, net, detections))
     return points_colors_normals;
 
-  // 3️⃣ Pick first human detection
+  // Pick first human detection
   cv::Rect human_bbox;
   cv::Mat human_mask;
   for (auto &det : detections) {
@@ -152,11 +152,13 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
   if (human_mask.empty())
     return points_colors_normals;
 
-  // 4️⃣ Erode mask to clean edges
-  cv::erode(human_mask, human_mask,
-            cv::getStructuringElement(cv::MORPH_RECT, cv::Size(erode_kernel_size, erode_kernel_size)));
+  // Erode mask to clean edges
+  cv::erode(
+      human_mask, human_mask,
+      cv::getStructuringElement(
+          cv::MORPH_RECT, cv::Size(erode_kernel_size, erode_kernel_size)));
 
-  // 5️⃣ Grab ZED point cloud
+  // Grab ZED point cloud
   sl::Mat pc_mat;
   if (zed.retrieveMeasure(pc_mat, sl::MEASURE::XYZRGBA) !=
       sl::ERROR_CODE::SUCCESS)
@@ -226,41 +228,40 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
 }
 
 cv::Mat ClientPublisher::getFilteredDepthMap(cv::dnn::Net &net,
-                                             Yolov8Seg &yolov8Seg) {
-  // 1️⃣ Grab RGB image
+                                             Yolov8Seg &yolov8Seg)
+{
+  // 1️⃣ Grab RGB
   sl::Mat sl_image;
-  if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS) {
+  if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS)
     return cv::Mat();
-  }
 
   cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
                   sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
   cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
 
-  // 2️⃣ YOLO detection
+  // 2️⃣ YOLO
   std::vector<OutputParams> detections;
   if (!yolov8Seg.Detect(cvImage, net, detections))
     return cv::Mat();
 
-  // 3️⃣ Pick first human detection
+  // 3️⃣ Best human
   cv::Rect human_bbox;
   cv::Mat human_mask;
   for (auto &det : detections) {
-    if (det.id == 0) { // person class
+    if (det.id == 0 && !det.boxMask.empty()) {
       human_bbox = det.box;
-      human_mask = det.boxMask.clone();
+      human_mask = det.boxMask;
       break;
     }
   }
-
   if (human_mask.empty())
     return cv::Mat();
 
-  // 4️⃣ Erode mask to clean edges
+  // 4️⃣ Erode
   cv::erode(human_mask, human_mask,
             cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
 
-  // 5️⃣ Grab ZED depth
+  // 5️⃣ Depth ZED
   sl::Mat depth_mat;
   if (zed.retrieveMeasure(depth_mat, sl::MEASURE::DEPTH) !=
       sl::ERROR_CODE::SUCCESS)
@@ -268,74 +269,100 @@ cv::Mat ClientPublisher::getFilteredDepthMap(cv::dnn::Net &net,
 
   int width = depth_mat.getWidth();
   int height = depth_mat.getHeight();
+
   cv::Mat depthMap(height, width, CV_32FC1,
                    depth_mat.getPtr<float>(sl::MEM::CPU));
 
-  // 6️⃣ Initialize full-size filtered depth map
+  // 6️⃣ Init zero depth
   cv::Mat filteredDepth = cv::Mat::zeros(height, width, CV_32FC1);
 
-  // 7️⃣ Apply mask in full image coordinates
-  for (int y = 0; y < human_bbox.height; y++) {
-    for (int x = 0; x < human_bbox.width; x++) {
-      if (human_mask.at<uchar>(y, x) > 0) {
-        int globalY = human_bbox.y + y;
-        int globalX = human_bbox.x + x;
-        if (globalY < height && globalX < width)
-          filteredDepth.at<float>(globalY, globalX) =
-              depthMap.at<float>(globalY, globalX);
-      }
+  // 7️⃣ Clip bbox to image
+  cv::Rect image_bounds(0, 0, width, height);
+  cv::Rect clipped_bbox = human_bbox & image_bounds;
+  if (clipped_bbox.width <= 0 || clipped_bbox.height <= 0)
+    return filteredDepth;
+
+  // mask offset
+  int mask_offset_x = clipped_bbox.x - human_bbox.x;
+  int mask_offset_y = clipped_bbox.y - human_bbox.y;
+
+  // 8️⃣ Copy masked depth with validity check
+  for (int y = 0; y < clipped_bbox.height; y++)
+  {
+    int img_y = clipped_bbox.y + y;
+    int mask_y = mask_offset_y + y;
+
+    const float* depth_ptr = depthMap.ptr<float>(img_y);
+    float* out_ptr = filteredDepth.ptr<float>(img_y);
+
+    for (int x = 0; x < clipped_bbox.width; x++)
+    {
+      int img_x = clipped_bbox.x + x;
+      int mask_x = mask_offset_x + x;
+
+      if (human_mask.at<uchar>(mask_y, mask_x) == 0)
+        continue;
+
+      float d = depth_ptr[img_x];
+
+      // ✅ validity filter (NaN / Inf / <=0)
+      if (std::isfinite(d) && d > 0.f)
+        out_ptr[img_x] = d;
     }
   }
 
   return filteredDepth;
 }
 
-std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
-ClientPublisher::extractPointCloudFast(bool include_normals = false) {
-  std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
-      pc_data;
-  // Try to grab a new frame
-  if (zed.grab() != sl::ERROR_CODE::SUCCESS) {
-    return pc_data; // No new frame available
+cv::Mat ClientPublisher::overlayBestPersonMask(const cv::Mat &image, cv::dnn::Net &yolo_net,
+                              Yolov8Seg &yolov8Seg) {
+  cv::Mat output = image.clone();
+  if (output.empty()) {
+    return output;
   }
 
-  // Retrieve point cloud directly in CPU memory for fast access
-  sl::Mat pc_mat;
-  if (zed.retrieveMeasure(pc_mat, sl::MEASURE::XYZRGBA, sl::MEM::CPU) !=
-      sl::ERROR_CODE::SUCCESS) {
-    return pc_data;
+  std::vector<OutputParams> detections;
+  if (!yolov8Seg.Detect(output, yolo_net, detections)) {
+    return output;
   }
 
-  int width = pc_mat.getWidth();
-  int height = pc_mat.getHeight();
-
-  // Preallocate to avoid reallocations
-  pc_data.clear();
-  pc_data.reserve(width * height);
-
-  // Pointer to raw float4 data
-  const sl::float4 *data_ptr = pc_mat.getPtr<sl::float4>(sl::MEM::CPU);
-  const size_t total = static_cast<size_t>(width) * static_cast<size_t>(height);
-
-  for (size_t i = 0; i < total; ++i) {
-    const sl::float4 &p = data_ptr[i];
-
-    // Skip invalid or NaN points
-    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+  float best_confidence = -1.0f;
+  cv::Rect best_bbox;
+  cv::Mat best_mask;
+  for (const auto &det : detections) {
+    if (det.id != 0 || det.boxMask.empty()) {
       continue;
-
-    // 3D position
-    Eigen::Vector3d pos(p.x, p.y, p.z);
-
-    // Decode RGBA (stored as packed float)
-    uint32_t color_uint = *reinterpret_cast<const uint32_t *>(&p.w);
-    const unsigned char *rgba =
-        reinterpret_cast<const unsigned char *>(&color_uint);
-
-    // RGB normalized to [0, 1]
-    Eigen::Vector3d color(rgba[0] / 255.0, rgba[1] / 255.0, rgba[2] / 255.0);
-
-    pc_data.emplace_back(pos, color, Eigen::Vector3d(0.0, 0.0, 0.0));
+    }
+    if (det.confidence > best_confidence) {
+      best_confidence = det.confidence;
+      best_bbox = det.box;
+      best_mask = det.boxMask;
+    }
   }
-  return pc_data;
+
+  if (best_mask.empty()) {
+    return output;
+  }
+
+  cv::Rect image_bounds(0, 0, output.cols, output.rows);
+  cv::Rect clipped_bbox = best_bbox & image_bounds;
+  if (clipped_bbox.width <= 0 || clipped_bbox.height <= 0) {
+    return output;
+  }
+
+  int mask_x = clipped_bbox.x - best_bbox.x;
+  int mask_y = clipped_bbox.y - best_bbox.y;
+  cv::Rect mask_roi(mask_x, mask_y, clipped_bbox.width, clipped_bbox.height);
+  if (mask_roi.x < 0 || mask_roi.y < 0 ||
+      mask_roi.x + mask_roi.width > best_mask.cols ||
+      mask_roi.y + mask_roi.height > best_mask.rows) {
+    return output;
+  }
+
+  cv::Mat roi = output(clipped_bbox);
+  cv::Mat roi_overlay = roi.clone();
+  roi_overlay.setTo(cv::Scalar(0, 0, 255), best_mask(mask_roi));
+  constexpr double alpha = 0.4;
+  cv::addWeighted(roi_overlay, alpha, roi, 1.0 - alpha, 0.0, roi);
+  return output;
 }
