@@ -340,6 +340,9 @@ int main(int argc, char **argv) {
   auto time_now = std::chrono::high_resolution_clock::now();
   bool already_saved = false;
   bool include_normals = true;
+  cv::Mat human_mask;
+  cv::Rect human_bbox;
+  auto identity = Eigen::Matrix4d::Identity();
 
   SimpleTimer timer;
   // ------------------ Main loop ------------------
@@ -353,11 +356,14 @@ int main(int argc, char **argv) {
     if (publish_merged_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
         // get points, colors and normals
-        auto pcn = clients[i].getFilteredPointCloud(
-            T_cams_extrinsics[i], yolo_net, yolov8Seg, include_normals,
-            erode_body_mask_kernel_size);
-        pcn = voxelDownsample(pcn, published_body_filter_voxel_size);
-        pcs[i] = pcn;
+        if (clients[i].getYoloPredictionMask(yolo_net, yolov8Seg, human_mask,
+                                             human_bbox,
+                                             erode_body_mask_kernel_size)) {
+          auto pcn = clients[i].getFilteredPointCloud(
+              identity, human_mask, human_bbox, include_normals);
+          pcn = voxelDownsample(pcn, published_body_filter_voxel_size);
+          pcs[i] = pcn;
+        }
       }
       auto merged_cloud = mergePointClouds(pcs);
       publishPointCloud(cloud_pub, merged_cloud, cam_frames[0],
@@ -384,8 +390,7 @@ int main(int argc, char **argv) {
       auto identity = Eigen::Matrix4d::Identity();
       for (int i = 0; i < cameras.size(); i++) {
         auto pcn = clients[i].getFilteredPointCloud(
-            identity, yolo_net, yolov8Seg, include_normals,
-            erode_body_mask_kernel_size);
+            identity, human_mask, human_bbox, include_normals);
         publishPointCloud(per_cam_cloud_pubs[i], pcn, cam_frames[i],
                           include_normals);
       }
@@ -393,7 +398,7 @@ int main(int argc, char **argv) {
     if (publish_human_depth_map) {
       for (size_t i = 0; i < clients.size(); ++i) {
 
-        cv::Mat depth_map = clients[i].getFilteredDepthMap(yolo_net, yolov8Seg);
+        cv::Mat depth_map = clients[i].getFilteredDepthMap(human_mask, human_bbox);
         if (depth_map.empty()) {
           RCLCPP_WARN(node->get_logger(),
                       "Empty depth map for camera %d, skipping depth "
@@ -422,7 +427,7 @@ int main(int argc, char **argv) {
           cv::Mat displayed_image = cvImage;
           if (overlay_yolo_mask && !yolo_model_path.empty()) {
             displayed_image =
-                clients[i].overlayBestPersonMask(cvImage, yolo_net, yolov8Seg);
+                clients[i].overlayPersonMask(cvImage, human_mask, human_bbox);
           }
 
           if (publish_image) {

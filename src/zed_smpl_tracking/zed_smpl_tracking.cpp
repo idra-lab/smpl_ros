@@ -13,8 +13,8 @@
 #include "utils/json.hpp"
 #include "yolov8_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
-#include "zed_smpl_tracking/utils.hpp"
 #include "zed_smpl_tracking/bodyConverter.hpp"
+#include "zed_smpl_tracking/utils.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -93,6 +93,10 @@ int main(int argc, char **argv) {
   std::string frame_id = "zed_camera_frame";
   auto start_time = std::chrono::high_resolution_clock::now();
   bool cloud_saved = false;
+  cv::Mat human_mask;
+  cv::Rect human_bbox;
+  auto identity = Eigen::Matrix4d::Identity();
+  bool include_normals = true;
 
   // ------------------ Main Loop ------------------
   while (rclcpp::ok()) {
@@ -101,8 +105,11 @@ int main(int argc, char **argv) {
     std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
         pc_data;
     if (publish_human_point_cloud) {
-      pc_data = client.getFilteredPointCloud(Eigen::Matrix4d::Identity(),
-                                             yolo_net, yolov8Seg, false, 5);
+      if (client.getYoloPredictionMask(yolo_net, yolov8Seg, human_mask,
+                                       human_bbox, 0)) {
+        auto pc_data = client.getFilteredPointCloud(identity, human_mask,
+                                                 human_bbox, include_normals);
+      }
       if (!pc_data.empty()) {
         publishPointCloud(cloud_pub, pc_data, frame_id);
 
@@ -120,7 +127,7 @@ int main(int argc, char **argv) {
       }
     }
     if (publish_human_depth_map) {
-      cv::Mat depth_map = client.getFilteredDepthMap(yolo_net, yolov8Seg);
+      cv::Mat depth_map = client.getFilteredDepthMap(human_mask, human_bbox);
       if (!depth_map.empty()) {
         publish_depth_msg(depth_map_pub, depth_map, frame_id);
       }

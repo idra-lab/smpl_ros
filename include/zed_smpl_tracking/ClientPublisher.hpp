@@ -47,15 +47,19 @@ public:
   void stop();
   void setStartSVOPosition(unsigned pos);
 
+  bool getYoloPredictionMask(cv::dnn::Net &net, Yolov8Seg &yolov8Seg,
+                             cv::Mat &out_mask, cv::Rect &out_bbox,
+                             int erode_kernel_size);
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
-  getFilteredPointCloud(const Eigen::Matrix4d &T, cv::dnn::Net &net,
-                        Yolov8Seg &yolov8Seg, bool include_normals,
-                        int erode_kernel_size);
-  cv::Mat getFilteredDepthMap(cv::dnn::Net &net, Yolov8Seg &yolov8Seg);
+  getFilteredPointCloud(const Eigen::Matrix4d &T, const cv::Mat &human_mask,
+                        const cv::Rect &human_bbox, bool include_normals);
+
+  cv::Mat getFilteredDepthMap(const cv::Mat &human_mask,
+                              const cv::Rect &human_bbox);
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   extractPointCloudFast(bool include_normals);
-  cv::Mat overlayBestPersonMask(const cv::Mat &image, cv::dnn::Net &yolo_net,
-                                Yolov8Seg &yolov8Seg);
+  cv::Mat overlayPersonMask(const cv::Mat &image, const cv::Mat &mask,
+                            const cv::Rect &bbox);
 
 private:
   void work();

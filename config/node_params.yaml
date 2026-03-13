@@ -2,16 +2,16 @@ smpl_publisher_node:
   ros__parameters:
     calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/two_cams_fusion_config.json"
     yolo_model_path: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/yolov8s-seg.onnx"
-    # resolution: "1920x1080"
-    resolution: "1280x720"
+    resolution: "1920x1080"
+    # resolution: "1280x720"
     # resolution: "672x376"
     publish_merged_point_cloud: false # whether to publish a single merged point cloud of all cameras or separate point clouds for each camera
     publish_separate_point_clouds: true # wheter to publish a point cloud for each camera on separate topics
     publish_human_depth_map: false # whether to publish a depth map with only the human pixels (for visualization purposes)
     publish_image: false # whether to publish the original image
     publish_body: true # whether to publish the body keypoints and smpl parameters
-    published_body_filter_voxel_size: 0.015
-    erode_body_mask_kernel_size: 18
+    published_body_filter_voxel_size: 0.01
+    erode_body_mask_kernel_size: 10
     visualize_image: true
     overlay_yolo_mask: true
     point_cloud_output_file: "" # only if publish_point_cloud is true
