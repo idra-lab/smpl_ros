@@ -1,5 +1,6 @@
 #pragma once
 #include "bodyStruct.hpp"
+#include "utils/constants.hpp"
 #include <Eigen/Dense>
 #include <atomic>
 #include <cv_bridge/cv_bridge.h>
@@ -14,7 +15,6 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <thread>
 #include <vector>
-#include "utils/constants.hpp"
 
 #define NUM_BETAS 10
 std::vector<double> load_smpl_betas(const std::string &smpl_params_path) {
@@ -113,8 +113,6 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
   }
   return rvec;
 }
-
-
 
 // ---- Build SMPL message from ZED fused body and apply transforms ----
 inline smpl_msgs::msg::Smpl
@@ -219,51 +217,64 @@ Eigen::Matrix4d slTransformToEigen(const sl::Transform &T) {
 }
 static void broadcastStaticCameras(
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tf_broadcaster,
-    const std::vector<Eigen::Matrix4d> &T_cams_extrinsics,
+    const std::vector<Eigen::Matrix4d> &T_map_cam,
     const std::vector<std::string> &cam_frames,
-    const std::string &parent_frame = "map") {
+    const std::string &parent_frame = "map",
+    const std::string &image_suffix = "_image") {
+  std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  rclcpp::Time stamp = rclcpp::Clock().now();
 
-  int i = 0;
-  for (const auto &T : T_cams_extrinsics) {
-    // create transform message
-    geometry_msgs::msg::TransformStamped t;
-    t.header.stamp = rclcpp::Clock().now();
-    t.header.frame_id = parent_frame;
-    t.child_frame_id = cam_frames[i];
+  // Transform ROS -> Image (same for all cameras)
+  Eigen::Matrix4d T_img = ros_to_image_transform(); //.inverse();
 
-    // translation
-    t.transform.translation.x = T(0, 3);
-    t.transform.translation.y = T(1, 3);
-    t.transform.translation.z = T(2, 3);
+  for (size_t i = 0; i < cam_frames.size(); ++i) {
+    const auto &frame = cam_frames[i];
+    const auto &T = T_map_cam[i];
 
-    // rotation
+    // -------------------------
+    // map -> camera_frame
+    // -------------------------
+    geometry_msgs::msg::TransformStamped t_map_cam;
+    t_map_cam.header.stamp = stamp;
+    t_map_cam.header.frame_id = parent_frame;
+    t_map_cam.child_frame_id = frame;
+
+    t_map_cam.transform.translation.x = T(0, 3);
+    t_map_cam.transform.translation.y = T(1, 3);
+    t_map_cam.transform.translation.z = T(2, 3);
+
     Eigen::Quaterniond q(T.block<3, 3>(0, 0));
-    t.transform.rotation.x = q.x();
-    t.transform.rotation.y = q.y();
-    t.transform.rotation.z = q.z();
-    t.transform.rotation.w = q.w();
+    t_map_cam.transform.rotation.x = q.x();
+    t_map_cam.transform.rotation.y = q.y();
+    t_map_cam.transform.rotation.z = q.z();
+    t_map_cam.transform.rotation.w = q.w();
 
-    // send immediately
-    tf_broadcaster->sendTransform(t);
-    i++;
+    transforms.push_back(t_map_cam);
+
+    // -------------------------
+    // camera_frame -> camera_frame_image
+    // -------------------------
+    geometry_msgs::msg::TransformStamped t_cam_img;
+    t_cam_img.header.stamp = stamp;
+    t_cam_img.header.frame_id = frame;
+    t_cam_img.child_frame_id = frame + image_suffix;
+
+    t_cam_img.transform.translation.x = T_img(0, 3);
+    t_cam_img.transform.translation.y = T_img(1, 3);
+    t_cam_img.transform.translation.z = T_img(2, 3);
+
+    Eigen::Quaterniond q_img(T_img.block<3, 3>(0, 0));
+    t_cam_img.transform.rotation.x = q_img.x();
+    t_cam_img.transform.rotation.y = q_img.y();
+    t_cam_img.transform.rotation.z = q_img.z();
+    t_cam_img.transform.rotation.w = q_img.w();
+
+    transforms.push_back(t_cam_img);
   }
 
-  geometry_msgs::msg::TransformStamped t;
-  t.header.stamp = rclcpp::Clock().now();
-  t.header.frame_id = parent_frame + "_image";
-  t.child_frame_id = parent_frame;
-  // use ros_to_image_transform
-  Eigen::Matrix4d T_image = ros_to_image_transform().inverse();
-  t.transform.translation.x = T_image(0, 3);
-  t.transform.translation.y = T_image(1, 3);
-  t.transform.translation.z = T_image(2, 3);
-  Eigen::Quaterniond q_image(T_image.block<3, 3>(0, 0));
-  t.transform.rotation.x = q_image.x();
-  t.transform.rotation.y = q_image.y();
-  t.transform.rotation.z = q_image.z();
-  t.transform.rotation.w = q_image.w();
-  tf_broadcaster->sendTransform(t);
+  tf_broadcaster->sendTransform(transforms);
 }
+
 void save_ply(const std::string &filename,
               const std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d,
                                            Eigen::Vector3d>> &pc,
@@ -544,4 +555,3 @@ void publishCameraInfo(
 
   pub->publish(msg);
 }
-

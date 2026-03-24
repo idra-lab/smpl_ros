@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
   std::vector<double> betas(300, 0.0);
   if (smpl_params_path == "") {
     RCLCPP_INFO(node->get_logger(),
-                "No .json params file specified: SMPL betas set to zero");
+                "No smpl .json params file specified: SMPL betas set to zero");
   } else {
     betas = load_smpl_betas(smpl_params_path);
   }
@@ -277,8 +277,7 @@ int main(int argc, char **argv) {
   });
   RCLCPP_INFO(node->get_logger(), "ROS spinning thread started.");
 
-  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics, cam_frames,
-                         cam_frames[0]);
+  broadcastStaticCameras(tf_static_broadcaster_, T_cams_extrinsics, cam_frames);
 
   RCLCPP_INFO(node->get_logger(),
               "Published static TFs for cameras with frames: , parent frame: ");
@@ -355,12 +354,20 @@ int main(int argc, char **argv) {
     std::vector<std::vector<
         std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>>
         pcs(clients.size());
+
+    if (publish_merged_point_cloud || publish_separate_point_clouds ||
+        publish_human_depth_map || (publish_image && overlay_yolo_mask)) {
+      for (int i = 0; i < cameras.size(); i++) {
+        clients[i].getYoloPredictionMask(yolo_net, yolov8Seg, human_masks[i],
+                                         human_bboxes[i],
+                                         erode_body_mask_kernel_size);
+      }
+    }
+
     if (publish_merged_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
         // get points, colors and normals
-        if (clients[i].getYoloPredictionMask(yolo_net, yolov8Seg, human_masks[i],
-                                             human_bboxes[i],
-                                             erode_body_mask_kernel_size)) {
+        if (!human_masks[i].empty()) {
           auto pcn = clients[i].getFilteredPointCloud(
               identity, human_masks[i], human_bboxes[i], include_normals);
           pcn = voxelDownsample(pcn, published_body_filter_voxel_size);
@@ -389,29 +396,31 @@ int main(int argc, char **argv) {
     }
     if (publish_separate_point_clouds) {
       // publish pc on separate topics
-      auto identity = Eigen::Matrix4d::Identity();
       for (int i = 0; i < cameras.size(); i++) {
-        auto pcn = clients[i].getFilteredPointCloud(
-            identity, human_masks[i], human_bboxes[i], include_normals);
-        publishPointCloud(per_cam_cloud_pubs[i], pcn, cam_frames[i],
-                          include_normals);
+        if (!human_masks[i].empty()) {
+          auto pcn = clients[i].getFilteredPointCloud(
+              identity, human_masks[i], human_bboxes[i], include_normals);
+          publishPointCloud(per_cam_cloud_pubs[i], pcn, cam_frames[i],
+                            include_normals);
+        }
       }
     }
     if (publish_human_depth_map) {
       for (size_t i = 0; i < clients.size(); ++i) {
+        if (!human_masks[i].empty()) {
+          cv::Mat depth_map =
+              clients[i].getFilteredDepthMap(human_masks[i], human_bboxes[i]);
+          if (depth_map.empty()) {
+            RCLCPP_WARN(node->get_logger(),
+                        "Empty depth map for camera %d, skipping depth "
+                        "publishing for this frame.",
+                        cam_ids[i]);
+            continue;
+          }
+          // continue;
 
-        cv::Mat depth_map =
-            clients[i].getFilteredDepthMap(human_masks[i], human_bboxes[i]);
-        if (depth_map.empty()) {
-          RCLCPP_WARN(node->get_logger(),
-                      "Empty depth map for camera %d, skipping depth "
-                      "publishing for this frame.",
-                      cam_ids[i]);
-          continue;
+          publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i]);
         }
-        // continue;
-
-        publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i]);
       }
     }
     // Publish RGB image if requested
@@ -428,9 +437,9 @@ int main(int argc, char **argv) {
           cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
 
           cv::Mat displayed_image = cvImage;
-          if (overlay_yolo_mask && !yolo_model_path.empty()) {
-            displayed_image =
-                clients[i].overlayPersonMask(cvImage, human_masks[i], human_bboxes[i]);
+          if (overlay_yolo_mask && !human_masks[i].empty()) {
+            displayed_image = clients[i].overlayPersonMask(
+                cvImage, human_masks[i], human_bboxes[i]);
           }
 
           if (publish_image) {

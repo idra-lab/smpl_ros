@@ -105,6 +105,9 @@ int main(int argc, char **argv) {
     std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
         pc_data;
     if (publish_human_point_cloud) {
+      // clear mask and bbox for each frame
+      human_mask = cv::Mat();
+      human_bbox = cv::Rect();
       if (client.getYoloPredictionMask(yolo_net, yolov8Seg, human_mask,
                                        human_bbox, 0)) {
         auto pc_data = client.getFilteredPointCloud(identity, human_mask,
