@@ -12,6 +12,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <sl/Camera.hpp>
+#include <smpl_msgs/msg/fixed_size_image.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <thread>
 #include <vector>
@@ -336,7 +337,9 @@ void publishPointCloud(
         std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>> &cloud,
     const std::string &frame_id = "map", bool include_normals = false) {
 
-  sensor_msgs::msg::PointCloud2 cloud_msg;
+  // sensor_msgs::msg::PointCloud2 cloud_msg;
+  auto loaned_msg = pub->borrow_loaned_message();
+  auto &cloud_msg = loaned_msg.get();
   cloud_msg.header.stamp = rclcpp::Clock().now();
   cloud_msg.header.frame_id = frame_id;
   cloud_msg.height = 1;
@@ -432,50 +435,105 @@ void publishPointCloud(
     ++iter_z;
     ++iter_rgb;
   }
+  RCLCPP_INFO(rclcpp::get_logger("zed_smpl_tracking"),
+              "Publishing point cloud with %zu points (include_normals=%s)",
+              cloud.size(), include_normals ? "true" : "false");
 
-  pub->publish(cloud_msg);
+  pub->publish(std::move(loaned_msg));
 }
-
 void publish_image_msg(
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub,
-    const cv::Mat &image, const std::string &frame_id) {
-  std_msgs::msg::Header header;
-  header.stamp = rclcpp::Clock().now();
-  header.frame_id = frame_id;
-  // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Publishing image with %d
-  // channels",
-  //             image.channels());
-  // cv::cvtColor(image, image, cv::COLOR_BGRA2RGBA);
-  auto image_msg = cv_bridge::CvImage(header, "bgr8", image).toImageMsg();
-  image_pub->publish(*image_msg);
-}
-
-void publish_depth_msg(
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub,
-    const cv::Mat &depth, const std::string &frame_id) {
-
-  if (depth.empty())
+    rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr image_pub,
+    const cv::Mat &image, const std::string &frame_id = "map") {
+  if (image.empty())
     return;
 
-  std_msgs::msg::Header header;
-  header.stamp = rclcpp::Clock().now();
-  header.frame_id = frame_id;
-
-  std::string encoding;
-
-  if (depth.type() == CV_32FC1)
-    encoding = "32FC1";
-  else if (depth.type() == CV_16UC1)
-    encoding = "16UC1";
-  else {
-    RCLCPP_WARN(rclcpp::get_logger("depth_pub"), "Unsupported depth type");
+  if (image.rows != 480 || image.cols != 640) {
+    RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
+                 "Image size must be 640x480!");
     return;
   }
 
-  auto msg = cv_bridge::CvImage(header, encoding, depth).toImageMsg();
-  depth_pub->publish(*msg);
+  if (image.type() != CV_16UC1) {
+    RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
+                 "Image must be CV_16UC1 (uint16)!");
+    return;
+  }
+
+  // Borrow loaned message
+  auto loaned_msg = image_pub->borrow_loaned_message();
+  auto &msg = loaned_msg.get();
+
+  // Header
+  msg.header.stamp = rclcpp::Clock().now();
+  msg.header.frame_id = frame_id;
+
+  // Metadata
+  msg.height = image.rows;
+  msg.width = image.cols;
+  msg.encoding = 0; // 0 = uint16
+  msg.is_bigendian = false;
+  msg.step = image.cols * sizeof(uint16_t);
+
+  // Copy data into fixed-size array
+  std::memcpy(msg.data.data(), image.data, 307200 * sizeof(uint16_t));
+
+  // Publish
+  image_pub->publish(std::move(loaned_msg));
 }
 
+void publish_depth_msg(
+    rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr pub,
+    const cv::Mat &depth_mat, const std::string &frame_id = "map") {
+  if (depth_mat.empty())
+    return;
+
+  // Converti in uint16 se necessario
+  cv::Mat depth_uint16;
+  if (depth_mat.type() == CV_32FC1) {
+    depth_mat.convertTo(depth_uint16, CV_16UC1); // float → uint16
+  } else if (depth_mat.type() == CV_16UC1) {
+    depth_uint16 = depth_mat;
+  } else {
+    RCLCPP_ERROR(rclcpp::get_logger("depth_pub"),
+                 "Unsupported depth type! Only CV_32FC1 or CV_16UC1.");
+    return;
+  }
+
+  int height = depth_uint16.rows; // 376
+  int width = depth_uint16.cols;  // 672
+
+  if (height != 376 || width != 672) {
+    RCLCPP_ERROR(rclcpp::get_logger("depth_pub"),
+                 "Depth image must be 672x376!");
+    return;
+  }
+
+  // Loan API per SHM zero-copy
+  auto loaned_msg = pub->borrow_loaned_message();
+  auto &msg = loaned_msg.get();
+
+  // Header
+  msg.header.stamp = rclcpp::Clock().now();
+  msg.header.frame_id = frame_id;
+
+  // Metadata
+  msg.height = height;
+  msg.width = width;
+  msg.encoding = 0; // uint16
+  msg.is_bigendian = false;
+  msg.step = width * sizeof(uint16_t); // 672*2 = 1344
+
+  // Copia dati nella fixed-size array
+  std::memcpy(msg.data.data(), depth_uint16.data,
+              height * width * sizeof(uint16_t));
+
+  RCLCPP_INFO(rclcpp::get_logger("depth_pub"),
+              "Depth message published: %dx%d, size %zu bytes", width, height,
+              msg.data.size() * sizeof(uint16_t));
+
+  // Pubblica
+  pub->publish(std::move(loaned_msg));
+}
 // Simple Timer Class for measuring elapsed time
 class SimpleTimer {
 public:
@@ -504,21 +562,12 @@ private:
   bool running_ = false;
 };
 
-void publishCameraInfo(
-    const rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr &pub,
-    sl::Camera &zed, const rclcpp::Time &stamp, const std::string &frame_id,
-    int width, int height) {
-  auto cam_params =
-      zed.getCameraInformation().camera_configuration.calibration_parameters;
-
+sensor_msgs::msg::CameraInfo
+buildCameraInfoMsg(const sl::CalibrationParameters &cam_params,
+                   const std::string &frame_id, const int width,
+                   const int height) {
   sensor_msgs::msg::CameraInfo msg;
-
-  msg.header.stamp = stamp;
   msg.header.frame_id = frame_id;
-
-  msg.width = width;
-  msg.height = height;
-
   // ---- Intrinsics (K) ----
   msg.k = {cam_params.left_cam.fx,
            0.0,
@@ -553,5 +602,5 @@ void publishCameraInfo(
            cam_params.left_cam.disto[2], cam_params.left_cam.disto[3],
            cam_params.left_cam.disto[4]};
 
-  pub->publish(msg);
+  return msg;
 }

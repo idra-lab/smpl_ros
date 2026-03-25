@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "smpl_msgs/msg/fixed_size_image.hpp"
 #include "smpl_msgs/msg/smpl.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "utils/json.hpp"
@@ -105,19 +106,31 @@ int main(int argc, char **argv) {
               "Point cloud will be saved to: %s after %.2f seconds",
               pc_output_file.c_str(), time_before_saving_pc);
 
+  rclcpp::QoS qos_sensor(rclcpp::KeepLast(1));
+  qos_sensor.best_effort();
+  qos_sensor.durability_volatile();
+
+  rclcpp::QoS qos_camera_info(1);
+  qos_camera_info.reliable();
+  qos_camera_info.transient_local();
+
+  rclcpp::QoS qos_reliable(10);
+  qos_reliable.reliable();
+
   // ------------------ ROS Publishers ------------------
-  auto smpl_pub =
-      node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params", 10);
-  auto cloud_pub =
-      node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
+  auto smpl_pub = node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params",
+                                                               qos_reliable);
+  auto cloud_pub = node->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/human_cloud", qos_sensor);
   // Image publisher (for visualization/debugging)
-  std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> image_pubs;
+  std::vector<rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr>
+      image_pubs;
   if (publish_image) {
     RCLCPP_INFO(node->get_logger(), "Image publishing enabled.");
     // create one publisher per camera
     for (int i = 0; i < 4; i++) {
-      auto pub = node->create_publisher<sensor_msgs::msg::Image>(
-          "/camera" + std::to_string(i + 1) + "/image", 10);
+      auto pub = node->create_publisher<smpl_msgs::msg::FixedSizeImage>(
+          "/camera" + std::to_string(i + 1) + "/image", qos_sensor);
       image_pubs.push_back(pub);
     }
   }
@@ -237,18 +250,34 @@ int main(int argc, char **argv) {
   // ------------------  Per-camera publishers ------------------
   rclcpp::QoS camera_info_qos(1);
   camera_info_qos.reliable();
-  camera_info_qos.transient_local();
+  camera_info_qos.durability_volatile();
   std::vector<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr>
       cam_info_pubs;
+  // create timers
+  std::vector<rclcpp::TimerBase::SharedPtr> cam_info_timers;
+  std::vector<sensor_msgs::msg::CameraInfo> cam_params_msg_list;
 
   for (int i = 0; i < clients.size(); i++) {
     auto pub = node->create_publisher<sensor_msgs::msg::CameraInfo>(
         cam_frames[i] + "/camera_info", camera_info_qos);
 
+    sl::CalibrationParameters cam_params =
+        clients[i]
+            .zed.getCameraInformation()
+            .camera_configuration.calibration_parameters;
+
+    auto cam_msg = std::make_shared<sensor_msgs::msg::CameraInfo>(
+        buildCameraInfoMsg(cam_params, cam_frames[i], width, height));
+
+    cam_params_msg_list.push_back(*cam_msg);
     cam_info_pubs.push_back(pub);
 
-    publishCameraInfo(pub, clients[i].zed, node->now(), cam_frames[i], width,
-                      height);
+    auto timer = node->create_wall_timer(std::chrono::milliseconds(250),
+                                         [pub, node, cam_msg]() {
+                                           cam_msg->header.stamp = node->now();
+                                           pub->publish(*cam_msg);
+                                         });
+    cam_info_timers.push_back(timer);
   }
 
   std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr>
@@ -260,8 +289,8 @@ int main(int argc, char **argv) {
     // Create one publisher per camera
     for (size_t i = 0; i < cam_ids.size(); ++i) {
       std::string topic = cam_frames[i] + "/point_cloud";
-      auto pub =
-          node->create_publisher<sensor_msgs::msg::PointCloud2>(topic, 10);
+      auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>(
+          topic, qos_sensor);
       per_cam_cloud_pubs.push_back(pub);
       RCLCPP_INFO(node->get_logger(), "PointCloud topic: %s", topic.c_str());
     }
@@ -283,12 +312,14 @@ int main(int argc, char **argv) {
               "Published static TFs for cameras with frames: , parent frame: ");
 
   // Create depthmap publishers using cam ids in the topic name
-  std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> depth_pubs;
+  std::vector<rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr>
+      depth_pubs;
   if (publish_human_depth_map) {
     RCLCPP_INFO(node->get_logger(), "Depth map publishing enabled.");
     for (size_t i = 0; i < cam_frames.size(); ++i) {
       std::string topic = cam_frames[i] + "/depth";
-      auto pub = node->create_publisher<sensor_msgs::msg::Image>(topic, 10);
+      auto pub =
+          node->create_publisher<smpl_msgs::msg::FixedSizeImage>(topic, 10);
       depth_pubs.push_back(pub);
 
       RCLCPP_INFO(node->get_logger(), "Depth topic: %s", topic.c_str());
@@ -349,7 +380,7 @@ int main(int argc, char **argv) {
   // ------------------ Main loop ------------------
   while (rclcpp::ok()) {
     trigger.notifyZED();
-    std::cout << "------------------ New Frame ------------------" << std::endl;
+    RCLCPP_INFO(node->get_logger(), "----------------New frame---------------");
     // points, colors, normals
     std::vector<std::vector<
         std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>>
@@ -443,9 +474,9 @@ int main(int argc, char **argv) {
           }
 
           if (publish_image) {
+            // add timesteps
             publish_image_msg(image_pubs[i], displayed_image, cam_frames[i]);
           }
-
           if (visualize_image) {
             cv::imshow(std::string("Camera ") + std::to_string(cam_ids[i]),
                        displayed_image);

@@ -9,6 +9,8 @@
 #include <thread>
 
 #include "smpl_msgs/msg/smpl.hpp"
+#include "smpl_msgs/msg/fixed_size_image.hpp"
+#include "smpl_msgs/msg/fixed_size_image.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "utils/json.hpp"
 #include "yolov8_seg.h"
@@ -57,9 +59,9 @@ int main(int argc, char **argv) {
   auto cloud_pub =
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
   auto image_pub =
-      node->create_publisher<sensor_msgs::msg::Image>("/zed/image", 10);
+      node->create_publisher<smpl_msgs::msg::FixedSizeImage>("/zed/image", 10);
   auto depth_map_pub =
-      node->create_publisher<sensor_msgs::msg::Image>("/human_depth_map", 10);
+      node->create_publisher<smpl_msgs::msg::FixedSizeImage>("/human_depth_map", 10);
 
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
