@@ -447,9 +447,9 @@ void publish_image_msg(
   if (image.empty())
     return;
 
-  if (image.rows != 480 || image.cols != 640) {
+  if (image.cols != 672 || image.rows != 376) {
     RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
-                 "Image size must be 640x480!");
+                 "Image size must be 672x376!");
     return;
   }
 
@@ -475,40 +475,36 @@ void publish_image_msg(
   msg.step = image.cols * sizeof(uint16_t);
 
   // Copy data into fixed-size array
-  std::memcpy(msg.data.data(), image.data, 307200 * sizeof(uint16_t));
+  std::memcpy(msg.data.data(), image.data, 252672 * sizeof(uint16_t));
 
   // Publish
   image_pub->publish(std::move(loaned_msg));
 }
-
 void publish_depth_msg(
     rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr pub,
-    const cv::Mat &depth_mat, const std::string &frame_id = "map") {
-  if (depth_mat.empty())
-    return;
-
-  // Converti in uint16 se necessario
-  cv::Mat depth_uint16;
-  if (depth_mat.type() == CV_32FC1) {
-    depth_mat.convertTo(depth_uint16, CV_16UC1); // float → uint16
-  } else if (depth_mat.type() == CV_16UC1) {
-    depth_uint16 = depth_mat;
-  } else {
-    RCLCPP_ERROR(rclcpp::get_logger("depth_pub"),
-                 "Unsupported depth type! Only CV_32FC1 or CV_16UC1.");
+    const cv::Mat &depth_mat, const std::string &frame_id = "map",
+    const float *normals = nullptr) {
+  if (depth_mat.empty()) {
+    RCLCPP_WARN(rclcpp::get_logger("depth_pub"), "Depth matrix is empty!");
     return;
   }
 
-  int height = depth_uint16.rows; // 376
-  int width = depth_uint16.cols;  // 672
+  if (depth_mat.type() != CV_32FC1) {
+    RCLCPP_ERROR(rclcpp::get_logger("depth_pub"),
+                 "Depth must be CV_32FC1 (float meters)");
+    return;
+  }
+
+  const int height = depth_mat.rows;
+  const int width = depth_mat.cols;
 
   if (height != 376 || width != 672) {
     RCLCPP_ERROR(rclcpp::get_logger("depth_pub"),
-                 "Depth image must be 672x376!");
+                 "Depth image must be 672x376! Got %dx%d", width, height);
     return;
   }
 
-  // Loan API per SHM zero-copy
+  // Loaned message (shared memory zero-copy)
   auto loaned_msg = pub->borrow_loaned_message();
   auto &msg = loaned_msg.get();
 
@@ -519,21 +515,47 @@ void publish_depth_msg(
   // Metadata
   msg.height = height;
   msg.width = width;
-  msg.encoding = 0; // uint16
+  msg.encoding = 1; // FLOAT32
   msg.is_bigendian = false;
-  msg.step = width * sizeof(uint16_t); // 672*2 = 1344
+  msg.step = width * sizeof(float);
 
-  // Copia dati nella fixed-size array
-  std::memcpy(msg.data.data(), depth_uint16.data,
-              height * width * sizeof(uint16_t));
+  // Copy depth float data
+  std::memcpy(msg.data.data(), depth_mat.data, height * width * sizeof(float));
 
-  RCLCPP_INFO(rclcpp::get_logger("depth_pub"),
-              "Depth message published: %dx%d, size %zu bytes", width, height,
-              msg.data.size() * sizeof(uint16_t));
+  // Copy normals if available
+  if (normals) {
+    float *dst = msg.normals.data();
+    for (int y = 0; y < height; y++) {
+      const float *src =
+          normals +
+          y * width * 4; // zed saves normals as 4 floats (nx, ny, nz, 0)
 
-  // Pubblica
+      for (int x = 0; x < width; x++) {
+        // apply ros -> image transform (x = -y, y = -z, z = x)
+        dst[(y * width + x) * 3 + 0] = -src[x * 4 + 1];
+        dst[(y * width + x) * 3 + 1] = -src[x * 4 + 2];
+        dst[(y * width + x) * 3 + 2] = src[x * 4 + 0];
+      }
+    }
+  } else {
+    std::fill(msg.normals.begin(), msg.normals.end(), 0.0f);
+  }
+
+  float min_n = 999, max_n = -999;
+  for (int i = 0; i < height * width * 3; i++) {
+    float v = msg.normals[i];
+    if (v < min_n)
+      min_n = v;
+    if (v > max_n)
+      max_n = v;
+  }
   pub->publish(std::move(loaned_msg));
+
+  // Debug info
+  double minVal, maxVal;
+  cv::minMaxLoc(depth_mat, &minVal, &maxVal);
 }
+
 // Simple Timer Class for measuring elapsed time
 class SimpleTimer {
 public:

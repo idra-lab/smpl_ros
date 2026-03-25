@@ -101,7 +101,7 @@ private:
 
     auto joints = output.joints.value().squeeze(0); // (24, 3)
     // retrieve pelvis (joint 0)
-    auto pelvis = joints.index({0, Slice()}); // (3,)
+    // auto pelvis = joints.index({0, Slice()}); // (3,)
 
     // RCLCPP_INFO_STREAM(this->get_logger(),
     //                    "Pelvis SMPL: " << pelvis
@@ -127,19 +127,16 @@ private:
     // for (int i = 0; i < 24; ++i) {
     //   geometry_msgs::msg::Pose pose;
     //   auto joint = joints.index({i, Slice()});
-    //   pose.position.x = static_cast<double>(joint[0].item<double>() +
-    //                                         offset[0].item<double>());
-    //   pose.position.y = static_cast<double>(joint[1].item<double>() +
-    //                                         offset[1].item<double>());
-    //   pose.position.z = static_cast<double>(joint[2].item<double>() +
-    //                                         offset[2].item<double>());
+    //   pose.position.x = static_cast<double>(joint[0].item<double>());
+    //   pose.position.y = static_cast<double>(joint[1].item<double>());
+    //   pose.position.z = static_cast<double>(joint[2].item<double>());
     //   pose.orientation.w = 1.0; // No orientation information
     //   keypoints_msg.poses.push_back(pose);
     // }
     // smpl_keypoints_pub_->publish(keypoints_msg);
 
     // --- Transform to ROS axes ---
-    smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_);
+    // smpl_vertices = torch::matmul(smpl_vertices, SMPL_TO_ROS_);
 
     // --- Update RViz ---
     vis_->add_mesh(smpl_vertices.unsqueeze(0), faces_, msg->header.stamp);
@@ -147,15 +144,13 @@ private:
     // --- Keypoints ---
     torch::Tensor keypoints =
         torch::zeros({24, 3}, torch::kFloat64).to(device_);
+
     for (int i = 0; i < 24; ++i) {
-      keypoints.index_put_({i, 0},
-                           static_cast<double>(msg->keypoints[i * 3 + 0]));
-      keypoints.index_put_({i, 1},
-                           static_cast<double>(msg->keypoints[i * 3 + 1]));
-      keypoints.index_put_({i, 2},
-                           static_cast<double>(msg->keypoints[i * 3 + 2]));
+      keypoints.index_put_({i, 0}, joints.index({i, 0}).item<double>());
+      keypoints.index_put_({i, 1}, joints.index({i, 1}).item<double>());
+      keypoints.index_put_({i, 2}, joints.index({i, 2}).item<double>());
     }
-    keypoints = torch::matmul(keypoints, SMPL_TO_ROS_);
+    // keypoints = torch::matmul(keypoints, SMPL_TO_ROS_);
     vis_->add_keypoints(keypoints, msg->header.stamp);
     vis_->add_skeleton(keypoints, msg->header.stamp);
     auto start = keypoints.index({0, Slice()});

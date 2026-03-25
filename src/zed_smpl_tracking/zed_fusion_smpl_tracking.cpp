@@ -248,36 +248,30 @@ int main(int argc, char **argv) {
     cam_frames.push_back(frame_name);
   }
   // ------------------  Per-camera publishers ------------------
-  rclcpp::QoS camera_info_qos(1);
+  // rclcpp::QoS camera_info_qos(1);
+  // camera_info_qos.reliable();
+  // camera_info_qos.durability_volatile();
+
+  rclcpp::QoS camera_info_qos(rclcpp::KeepLast(1));
   camera_info_qos.reliable();
-  camera_info_qos.durability_volatile();
+  camera_info_qos.transient_local();
+
   std::vector<rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr>
       cam_info_pubs;
-  // create timers
-  std::vector<rclcpp::TimerBase::SharedPtr> cam_info_timers;
-  std::vector<sensor_msgs::msg::CameraInfo> cam_params_msg_list;
 
   for (int i = 0; i < clients.size(); i++) {
     auto pub = node->create_publisher<sensor_msgs::msg::CameraInfo>(
         cam_frames[i] + "/camera_info", camera_info_qos);
+    cam_info_pubs.push_back(pub);
 
     sl::CalibrationParameters cam_params =
         clients[i]
             .zed.getCameraInformation()
             .camera_configuration.calibration_parameters;
 
-    auto cam_msg = std::make_shared<sensor_msgs::msg::CameraInfo>(
-        buildCameraInfoMsg(cam_params, cam_frames[i], width, height));
-
-    cam_params_msg_list.push_back(*cam_msg);
-    cam_info_pubs.push_back(pub);
-
-    auto timer = node->create_wall_timer(std::chrono::milliseconds(250),
-                                         [pub, node, cam_msg]() {
-                                           cam_msg->header.stamp = node->now();
-                                           pub->publish(*cam_msg);
-                                         });
-    cam_info_timers.push_back(timer);
+    sensor_msgs::msg::CameraInfo cam_msg =
+        buildCameraInfoMsg(cam_params, cam_frames[i], width, height);
+    pub->publish(cam_msg);
   }
 
   std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr>
@@ -297,7 +291,7 @@ int main(int argc, char **argv) {
   }
 
   // --- ROS spinning in background thread ---
-  rclcpp::executors::SingleThreadedExecutor exec;
+  rclcpp::executors::MultiThreadedExecutor exec;
   exec.add_node(node);
   std::atomic<bool> exec_running{true};
   std::thread ros_spin_thread([&]() {
@@ -449,8 +443,19 @@ int main(int argc, char **argv) {
             continue;
           }
           // continue;
-
-          publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i]);
+          if (include_normals) {
+            sl::Mat normal_mat;
+            if (clients[i].zed.retrieveMeasure(normal_mat,
+                                               sl::MEASURE::NORMALS) ==
+                sl::ERROR_CODE::SUCCESS) {
+              float *normal_ptr = normal_mat.getPtr<float>(sl::MEM::CPU);
+              publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i],
+                                normal_ptr);
+            } else {
+              include_normals = false;
+              publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i]);
+            }
+          }
         }
       }
     }

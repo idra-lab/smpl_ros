@@ -3,33 +3,41 @@ from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
-
+import os
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 def generate_launch_description():
-    static_tf_broadcaster_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_broadcaster',
-        output='screen',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'map1']
-    )
     # Declare launch arguments for configurability
+    rmw_zenoh_node = Node(
+        package='rmw_zenoh_cpp',
+        executable='rmw_zenohd',
+        name='rmw_zenohd',
+        output='screen'
+    )
+
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
         output='screen',
-        arguments=['-d', get_package_share_directory('smpl_ros') + '/rviz/vis.rviz']
+        arguments=['-d', os.expanduser('~') + '/.rviz/default.rviz']
+    )
+
+    camera_tf_broadcaster_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('easy_handeye2'), 'launch', 'publish.launch.py')
+        )
     )
     
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value='path/to/SMPL_model.npz',
+        default_value='models/SMPL_MALE.npz',
         description='Path to the SMPL model file (.npz)'
     )
     frame_id_arg = DeclareLaunchArgument(
         'frame_id',
-        default_value='map',
-        description='Frame ID for the SMPL model'
+        default_value='lbr_link_0',
+        description='Frame ID to which the SMPL model will be attached'
     )
 
 
@@ -47,8 +55,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         # static_tf_broadcaster_node,
-        # rviz_node,
+        rmw_zenoh_node,
+        rviz_node,
         model_path_arg,
         frame_id_arg,
         smpl_ros_viewer_node,
+        camera_tf_broadcaster_launch
     ])

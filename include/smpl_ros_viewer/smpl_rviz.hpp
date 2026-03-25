@@ -159,7 +159,8 @@ public:
         skel.points.push_back(q);
       }
     }
-
+    RCLCPP_INFO(rclcpp::get_logger("SMPLRviz"),
+                 "add_skeleton: added %zu lines", skel.points.size() / 2);
     markers_.markers.push_back(skel);
   }
 
