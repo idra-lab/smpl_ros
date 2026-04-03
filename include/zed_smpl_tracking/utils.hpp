@@ -3,8 +3,8 @@
 #include "utils/constants.hpp"
 #include <Eigen/Dense>
 #include <atomic>
-#include <cv_bridge/cv_bridge.h>
-#include <geometry_msgs/msg/transform_stamped.hpp>
+// #include <geometry_msgs/msg/transform_stamped.hpp>
+#include "utils/geom_utils.hpp"
 #include <map>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -117,71 +117,233 @@ static Eigen::Vector3d quatToRotVec(const Eigen::Quaterniond &q_in) {
 
 // ---- Build SMPL message from ZED fused body and apply transforms ----
 inline smpl_msgs::msg::Smpl
-buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_smpl_to_ros,
-                 const std::vector<double> &betas) {
+buildSMPLMessage(const Body &body, const Eigen::Matrix4d &T_ros_from_smpl,
+                 const std::vector<double> &betas,
+                 const rclcpp::Clock::SharedPtr &clock) {
+
+  static const auto logger = rclcpp::get_logger("zed_smpl_tracking");
+
   smpl_msgs::msg::Smpl msg;
-  Eigen::Matrix3d R_change = T_smpl_to_ros.block<3, 3>(0, 0);
 
-  // --- Root joint ---
-  Eigen::Matrix4d T_root = Eigen::Matrix4d::Identity();
-  T_root.block<3, 3>(0, 0) = body.global_orientation.toRotationMatrix();
-  T_root.block<3, 1>(0, 3) = body.root_position;
-  // RCLCPP_INFO_STREAM(rclcpp::get_logger("zed_smpl_tracking"),
-  //                    "Root: " << T_root);
+  // ============================================================
+  // VALIDATE & DECOMPOSE T_ros_from_smpl
+  // ============================================================
 
-  // change of basis to convert SMPL world to ROS world
-  Eigen::Matrix4d T_root_smpl =
-      T_smpl_to_ros * T_root * T_smpl_to_ros.inverse();
-
-  Eigen::Vector3d root_pos_smpl = T_root_smpl.block<3, 1>(0, 3);
-  Eigen::Quaterniond root_quat_smpl(T_root_smpl.block<3, 3>(0, 0));
-  Eigen::Vector3d root_rvec_smpl = quatToRotVec(root_quat_smpl);
-
-  msg.global_orient[0] = root_rvec_smpl.x();
-  msg.global_orient[1] = root_rvec_smpl.y();
-  msg.global_orient[2] = root_rvec_smpl.z();
-  msg.transl[0] = root_pos_smpl.x();
-  msg.transl[1] = root_pos_smpl.y();
-  msg.transl[2] = root_pos_smpl.z();
-
-  // --- Local joints ---
-  for (int j = 1; j < 24; ++j) {
-    Eigen::Quaterniond q_local_ros = body.local_orient.at(j).normalized();
-    Eigen::Matrix3d R_local_smpl =
-        R_change * q_local_ros.toRotationMatrix() * R_change.inverse();
-    Eigen::Vector3d rvec_local_smpl =
-        quatToRotVec(Eigen::Quaterniond(R_local_smpl));
-
-    msg.body_pose[(j - 1) * 3 + 0] = rvec_local_smpl.x();
-    msg.body_pose[(j - 1) * 3 + 1] = rvec_local_smpl.y();
-    msg.body_pose[(j - 1) * 3 + 2] = rvec_local_smpl.z();
+  // Guard: if the basis-change matrix is garbage, every downstream
+  // computation will be wrong — bail out with an identity-pose message.
+  if (!T_ros_from_smpl.allFinite()) {
+    RCLCPP_ERROR(logger, "T_ros_from_smpl contains non-finite values, "
+                         "returning default message.");
+    msg.header.stamp = clock->now();
+    msg.header.frame_id = "map";
+    return msg;
   }
 
-  // --- Keypoints ---
-  for (int j = 0; j < 24; ++j) {
-    const auto &kp = body.keypoints.at(j); // already in SMPL order
-    Eigen::Vector4d kp_h(kp.x(), kp.y(), kp.z(), 1.0);
-    Eigen::Vector4d kp_smpl = T_smpl_to_ros * kp_h;
+  const Eigen::Matrix3d R_basis = T_ros_from_smpl.block<3, 3>(0, 0);
 
-    if (std::isnan(kp_smpl.x()) || std::isnan(kp_smpl.y()) ||
-        std::isnan(kp_smpl.z())) {
-      RCLCPP_WARN(rclcpp::get_logger("zed_smpl_tracking"),
-                  "NaN keypoint detected, setting to zero.");
-      kp_smpl.head<3>().setZero();
+  // For a pure rotation/rigid matrix R^{-1} == R^T — avoid the costly
+  // and numerically noisier general inverse().
+  const Eigen::Matrix3d R_basis_inv = R_basis.transpose();
+
+  // Project R_basis onto SO(3) if floating-point drift has pushed it off.
+  // We reuse the validated copy for all subsequent change-of-basis ops.
+  Eigen::Matrix3d R_basis_clean = R_basis;
+  if (std::abs(R_basis.determinant() - 1.0) > 1e-4 || !R_basis.allFinite()) {
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd(R_basis, Eigen::ComputeFullU |
+                                                       Eigen::ComputeFullV);
+    R_basis_clean = svd.matrixU() * svd.matrixV().transpose();
+    if (R_basis_clean.determinant() < 0)
+      R_basis_clean = svd.matrixU() *
+                      Eigen::DiagonalMatrix<double, 3>(1, 1, -1) *
+                      svd.matrixV().transpose();
+    RCLCPP_WARN(logger, "R_basis was not a valid rotation matrix; "
+                        "projected onto SO(3).");
+  }
+  const Eigen::Matrix3d R_basis_clean_inv = R_basis_clean.transpose();
+
+  // ============================================================
+  // ROOT TRANSFORM  (SMPL world → ROS world)
+  // ============================================================
+
+  // Validate global orientation before using it.
+  Eigen::Quaterniond q_global = body.global_orientation;
+  if (!isValidQuaternion(q_global)) {
+    RCLCPP_WARN(logger, "global_orientation is invalid, using Identity.");
+    q_global = Eigen::Quaterniond::Identity();
+  }
+  q_global.normalize();
+
+  // Validate root position.
+  Eigen::Vector3d root_pos = body.root_position;
+  if (!root_pos.allFinite()) {
+    RCLCPP_WARN(logger, "root_position contains non-finite values, "
+                        "using zero.");
+    root_pos.setZero();
+  }
+
+  // Build root transform in SMPL frame.
+  Eigen::Matrix4d T_root_smpl = Eigen::Matrix4d::Identity();
+  T_root_smpl.block<3, 3>(0, 0) = q_global.toRotationMatrix();
+  T_root_smpl.block<3, 1>(0, 3) = root_pos;
+
+  // Change of basis:  T_root_ros = T_smpl_to_ros * T_root_smpl * T_ros_to_smpl
+  // Use the explicit rigid inverse instead of .inverse():
+  //   T^{-1} = [ R^T  | -R^T * t ]
+  //            [  0   |     1    ]
+  Eigen::Matrix4d T_ros_from_smpl_inv = Eigen::Matrix4d::Identity();
+  T_ros_from_smpl_inv.block<3, 3>(0, 0) = R_basis_clean_inv;
+  T_ros_from_smpl_inv.block<3, 1>(0, 3) =
+      -R_basis_clean_inv * T_ros_from_smpl.block<3, 1>(0, 3);
+
+  const Eigen::Matrix4d T_root_ros =
+      T_ros_from_smpl * T_root_smpl * T_ros_from_smpl_inv;
+
+  // Extract and validate root rotation.
+  const Eigen::Matrix3d R_root_ros = T_root_ros.block<3, 3>(0, 0);
+  Eigen::Quaterniond q_root_ros;
+  if (isValidRotationMatrix(R_root_ros)) {
+    q_root_ros = Eigen::Quaterniond(R_root_ros).normalized();
+  } else {
+    RCLCPP_WARN(logger, "Root rotation after basis change is not in SO(3), "
+                        "projecting.");
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd(R_root_ros, Eigen::ComputeFullU |
+                                                          Eigen::ComputeFullV);
+    Eigen::Matrix3d R_fixed = svd.matrixU() * svd.matrixV().transpose();
+    if (R_fixed.determinant() < 0)
+      R_fixed = svd.matrixU() * Eigen::DiagonalMatrix<double, 3>(1, 1, -1) *
+                svd.matrixV().transpose();
+    q_root_ros = Eigen::Quaterniond(R_fixed).normalized();
+  }
+
+  const Eigen::Vector3d rvec_root = quatToRotVec(q_root_ros);
+  const Eigen::Vector3d t_root = T_root_ros.block<3, 1>(0, 3);
+
+  msg.global_orient[0] = rvec_root.x();
+  msg.global_orient[1] = rvec_root.y();
+  msg.global_orient[2] = rvec_root.z();
+
+  msg.transl[0] = t_root.x();
+  msg.transl[1] = t_root.y();
+  msg.transl[2] = t_root.z();
+
+  // ============================================================
+  // LOCAL JOINT ROTATIONS  (change of basis, joints 1–23)
+  // ============================================================
+
+  // How many joints are actually available — avoid out-of-bounds access.
+  const int available_joints = static_cast<int>(body.local_orient.size());
+
+  for (int j = 1; j < 24; ++j) {
+    Eigen::Vector3d rvec_local = Eigen::Vector3d::Zero(); // safe default
+
+    if (j < available_joints) {
+      Eigen::Quaterniond q_local = body.local_orient[j];
+
+      if (!isValidQuaternion(q_local)) {
+        RCLCPP_WARN(logger, "local_orient[%d] is invalid, using Identity.", j);
+        q_local = Eigen::Quaterniond::Identity();
+      }
+      q_local.normalize();
+
+      // Change of basis for a rotation:  R_ros = R_b * R_smpl * R_b^T
+      const Eigen::Matrix3d R_local_ros =
+          R_basis_clean * q_local.toRotationMatrix() * R_basis_clean_inv;
+
+      // Validate result before converting to rotation vector.
+      Eigen::Quaterniond q_local_ros;
+      if (isValidRotationMatrix(R_local_ros)) {
+        q_local_ros = Eigen::Quaterniond(R_local_ros).normalized();
+      } else {
+        RCLCPP_WARN(logger,
+                    "local_orient[%d] result is not in SO(3), "
+                    "projecting.",
+                    j);
+        Eigen::JacobiSVD<Eigen::Matrix3d> svd(
+            R_local_ros, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        Eigen::Matrix3d R_fixed = svd.matrixU() * svd.matrixV().transpose();
+        if (R_fixed.determinant() < 0)
+          R_fixed = svd.matrixU() * Eigen::DiagonalMatrix<double, 3>(1, 1, -1) *
+                    svd.matrixV().transpose();
+        q_local_ros = Eigen::Quaterniond(R_fixed).normalized();
+      }
+
+      rvec_local = quatToRotVec(q_local_ros);
+    } else {
+      RCLCPP_WARN_ONCE(logger,
+                       "body.local_orient has fewer than 24 entries "
+                       "(%d available); missing joints default to zero.",
+                       available_joints);
     }
 
-    msg.keypoints[j * 3 + 0] = kp_smpl.x();
-    msg.keypoints[j * 3 + 1] = kp_smpl.y();
-    msg.keypoints[j * 3 + 2] = kp_smpl.z();
+    msg.body_pose[(j - 1) * 3 + 0] = rvec_local.x();
+    msg.body_pose[(j - 1) * 3 + 1] = rvec_local.y();
+    msg.body_pose[(j - 1) * 3 + 2] = rvec_local.z();
   }
-  for (size_t i = 0; i < NUM_BETAS; i++) {
+
+  // ============================================================
+  // KEYPOINTS  (point transformation)
+  // ============================================================
+
+  const int available_kps = static_cast<int>(body.keypoints.size());
+
+  for (int j = 0; j < 24; ++j) {
+    Eigen::Vector3d kp_ros = Eigen::Vector3d::Zero();
+
+    if (j < available_kps) {
+      const Eigen::Vector3d &kp = body.keypoints[j];
+
+      if (kp.allFinite()) {
+        Eigen::Vector4d kp_h(kp.x(), kp.y(), kp.z(), 1.0);
+        Eigen::Vector4d kp_ros_h = T_ros_from_smpl * kp_h;
+
+        // Guard against degenerate homogeneous division.
+        if (std::abs(kp_ros_h.w()) > 1e-9 && kp_ros_h.head<3>().allFinite()) {
+          kp_ros = kp_ros_h.head<3>() / kp_ros_h.w();
+        } else {
+          RCLCPP_WARN(logger,
+                      "Keypoint %d produced non-finite result "
+                      "after transform, setting to zero.",
+                      j);
+        }
+      } else {
+        RCLCPP_WARN(logger,
+                    "Keypoint %d contains non-finite input, "
+                    "setting to zero.",
+                    j);
+      }
+    }
+
+    msg.keypoints[j * 3 + 0] = kp_ros.x();
+    msg.keypoints[j * 3 + 1] = kp_ros.y();
+    msg.keypoints[j * 3 + 2] = kp_ros.z();
+  }
+
+  // ============================================================
+  // BETAS  (shape parameters, frame-invariant)
+  // ============================================================
+
+  const size_t num_betas_to_copy =
+      std::min(betas.size(), static_cast<size_t>(NUM_BETAS));
+  if (betas.size() < static_cast<size_t>(NUM_BETAS)) {
+    RCLCPP_WARN_ONCE(logger,
+                     "betas vector has %zu elements, expected %d; "
+                     "missing values default to 0.",
+                     betas.size(), NUM_BETAS);
+  }
+
+  for (size_t i = 0; i < num_betas_to_copy; ++i)
     msg.betas[i] = betas[i];
-  }
-  msg.header.stamp = rclcpp::Clock().now();
+  // Remaining slots are already zero-initialised by the message constructor.
+
+  // ============================================================
+  // HEADER
+  // ============================================================
+
+  msg.header.stamp = clock->now();
   msg.header.frame_id = "map";
+
   return msg;
 }
-
 // ---- Merge multiple point clouds into one ----
 inline std::vector<
     std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
@@ -446,10 +608,17 @@ void publish_image_msg(
     const cv::Mat &image, const std::string &frame_id = "map") {
   if (image.empty())
     return;
+  // Borrow loaned message
+  auto loaned_msg = image_pub->borrow_loaned_message();
+  auto &msg = loaned_msg.get();
 
-  if (image.cols != 672 || image.rows != 376) {
-    RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
-                 "Image size must be 672x376!");
+  int default_width = msg.width;
+  int default_height = msg.height;
+
+  if (image.cols != default_width || image.rows != default_height) {
+    RCLCPP_ERROR_STREAM(rclcpp::get_logger("image_pub"),
+                        "Image size must be " << default_width << "x"
+                                              << default_height);
     return;
   }
 
@@ -459,19 +628,15 @@ void publish_image_msg(
     return;
   }
 
-  // Borrow loaned message
-  auto loaned_msg = image_pub->borrow_loaned_message();
-  auto &msg = loaned_msg.get();
-
   // Header
   msg.header.stamp = rclcpp::Clock().now();
   msg.header.frame_id = frame_id;
 
   // Metadata
-  msg.height = image.rows;
-  msg.width = image.cols;
+  // msg.height = image.rows;
+  // msg.width = image.cols;
   msg.encoding = 0; // 0 = uint16
-  msg.is_bigendian = false;
+  // msg.is_bigendian = false;
   msg.step = image.cols * sizeof(uint16_t);
 
   // Copy data into fixed-size array
@@ -498,24 +663,27 @@ void publish_depth_msg(
   const int height = depth_mat.rows;
   const int width = depth_mat.cols;
 
-  if (height != 376 || width != 672) {
-    RCLCPP_ERROR(rclcpp::get_logger("depth_pub"),
-                 "Depth image must be 672x376! Got %dx%d", width, height);
-    return;
-  }
-
   // Loaned message (shared memory zero-copy)
   auto loaned_msg = pub->borrow_loaned_message();
   auto &msg = loaned_msg.get();
+  int default_width = msg.width;
+  int default_height = msg.height;
+
+  if (depth_mat.cols != default_width || depth_mat.rows != default_height) {
+    RCLCPP_ERROR_STREAM(rclcpp::get_logger("image_pub"),
+                        "Depth image size must be " << default_width << "x"
+                                              << default_height);
+    return;
+  }
 
   // Header
   msg.header.stamp = rclcpp::Clock().now();
   msg.header.frame_id = frame_id;
 
   // Metadata
-  msg.height = height;
-  msg.width = width;
-  msg.encoding = 1; // FLOAT32
+  // msg.height = height;
+  // msg.width = width;
+  // msg.encoding = 1; // FLOAT32
   msg.is_bigendian = false;
   msg.step = width * sizeof(float);
 

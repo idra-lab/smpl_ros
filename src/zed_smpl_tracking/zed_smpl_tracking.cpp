@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
         std::vector<sl::BodyData> body_vec = {bodies.body_list[0]};
         std::vector<Body> bodies_out = extractBodyData(body_vec, SMPL_TO_ZED);
         Body fusedBody = bodies_out[0];
-        auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
+        auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas, node->get_clock());
         smpl_pub->publish(msg);
       }
     }

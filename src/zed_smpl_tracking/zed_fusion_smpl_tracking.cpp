@@ -42,6 +42,7 @@ int main(int argc, char **argv) {
 
   // Parameters declaration
   node->declare_parameter<std::string>("resolution", "1920x1080");
+  node->declare_parameter<int>("num_cameras", 3);
   node->declare_parameter<bool>("publish_merged_point_cloud", false);
   node->declare_parameter<bool>("publish_separate_point_clouds", false);
   node->declare_parameter<bool>("publish_human_depth_map", false);
@@ -74,6 +75,8 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(), "Using YOLO model file: %s",
               yolo_model_path.c_str());
   std::string resolution_str = node->get_parameter("resolution").as_string();
+  int num_cameras = node->get_parameter("num_cameras").as_int();
+  RCLCPP_INFO(node->get_logger(), "Using number of cameras: %d", num_cameras);
   bool publish_merged_point_cloud =
       node->get_parameter("publish_merged_point_cloud").as_bool();
   bool publish_human_depth_map =
@@ -118,7 +121,7 @@ int main(int argc, char **argv) {
   qos_reliable.reliable();
 
   // ------------------ ROS Publishers ------------------
-  auto smpl_pub = node->create_publisher<smpl_msgs::msg::Smpl>("/smpl_params",
+  auto smpl_pub = node->create_publisher<smpl_msgs::msg::Smpl>("/skeleton_tracker",
                                                                qos_reliable);
   auto cloud_pub = node->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/human_cloud", qos_sensor);
@@ -128,7 +131,7 @@ int main(int argc, char **argv) {
   if (publish_image) {
     RCLCPP_INFO(node->get_logger(), "Image publishing enabled.");
     // create one publisher per camera
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < num_cameras; i++) {
       auto pub = node->create_publisher<smpl_msgs::msg::FixedSizeImage>(
           "/camera" + std::to_string(i + 1) + "/image", qos_sensor);
       image_pubs.push_back(pub);
@@ -176,6 +179,13 @@ int main(int argc, char **argv) {
   if (configurations.empty()) {
     RCLCPP_ERROR(node->get_logger(), "No ZED configurations found.");
     return EXIT_FAILURE;
+  }
+
+  if (num_cameras > 0 && static_cast<int>(configurations.size()) > num_cameras) {
+    RCLCPP_INFO(node->get_logger(),
+                "Limiting cameras from %ld to %d (num_cameras parameter)",
+                configurations.size(), num_cameras);
+    configurations.resize(num_cameras);
   }
 
   RCLCPP_INFO(node->get_logger(), "Starting ZED SMPL tracking...");
@@ -313,7 +323,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < cam_frames.size(); ++i) {
       std::string topic = cam_frames[i] + "/depth";
       auto pub =
-          node->create_publisher<smpl_msgs::msg::FixedSizeImage>(topic, 10);
+          node->create_publisher<smpl_msgs::msg::FixedSizeImage>(topic, qos_sensor);
       depth_pubs.push_back(pub);
 
       RCLCPP_INFO(node->get_logger(), "Depth topic: %s", topic.c_str());
@@ -553,7 +563,7 @@ int main(int argc, char **argv) {
       raw_bodies_vector.clear();
 
       // Build and publish SMPL message
-      auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas);
+      auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas, node->get_clock());
       // timer.tok("SMPL message building time");
       smpl_pub->publish(msg);
       // timer.tok("SMPL message publishing time");

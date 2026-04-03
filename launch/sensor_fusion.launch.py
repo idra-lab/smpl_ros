@@ -20,7 +20,7 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz2',
         output='screen',
-        arguments=['-d', os.expanduser('~') + '/.rviz/default.rviz']
+        arguments=['-d', os.path.expanduser('~') + '/.rviz2/default.rviz']
     )
 
     camera_tf_broadcaster_launch = IncludeLaunchDescription(
@@ -36,7 +36,7 @@ def generate_launch_description():
     )
     frame_id_arg = DeclareLaunchArgument(
         'frame_id',
-        default_value='lbr_link_0',
+        default_value='world',
         description='Frame ID to which the SMPL model will be attached'
     )
 
@@ -55,10 +55,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         # static_tf_broadcaster_node,
+        camera_tf_broadcaster_launch,
         rmw_zenoh_node,
         rviz_node,
         model_path_arg,
         frame_id_arg,
         smpl_ros_viewer_node,
-        camera_tf_broadcaster_launch
     ])
