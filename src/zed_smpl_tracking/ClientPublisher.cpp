@@ -14,7 +14,7 @@ bool ClientPublisher::open(sl::InputType input,
   init_parameters.depth_mode = sl::DEPTH_MODE::NEURAL_PLUS;
   init_parameters.input = input;
   init_parameters.coordinate_units = sl::UNIT::METER;
-  init_parameters.depth_stabilization = 30;
+  init_parameters.depth_stabilization = 1;
   init_parameters.sdk_gpu_id = sdk_gpu_id;
   // set max_depth to 10m
   init_parameters.depth_maximum_distance = 4.0;

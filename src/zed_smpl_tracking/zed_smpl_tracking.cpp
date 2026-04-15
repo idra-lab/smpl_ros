@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
         cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
                         zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
         cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
-        publish_image_msg(image_pub, cvImage, frame_id);
+        // publish_image_msg(image_pub, cvImage, frame_id);
       }
     }
 

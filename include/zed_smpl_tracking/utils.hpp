@@ -603,48 +603,103 @@ void publishPointCloud(
 
   pub->publish(std::move(loaned_msg));
 }
+// void publish_image_msg(
+//     rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr image_pub,
+//     const cv::Mat &image, const std::string &frame_id = "map") {
+//   if (image.empty())
+//     return;
+//   // Borrow loaned message
+//   auto loaned_msg = image_pub->borrow_loaned_message();
+//   auto &msg = loaned_msg.get();
+
+//   int default_width = msg.width;
+//   int default_height = msg.height;
+
+//   if (image.cols != default_width || image.rows != default_height) {
+//     RCLCPP_ERROR_STREAM(rclcpp::get_logger("image_pub"),
+//                         "Image size must be " << default_width << "x"
+//                                               << default_height);
+//     return;
+//   }
+
+//   if (image.type() != CV_16UC1) {
+//     RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
+//                  "Image must be CV_16UC1 (uint16)!");
+//     return;
+//   }
+
+//   // Header
+//   msg.header.stamp = rclcpp::Clock().now();
+//   msg.header.frame_id = frame_id;
+
+//   // Metadata
+//   // msg.height = image.rows;
+//   // msg.width = image.cols;
+//   msg.encoding = 0; // 0 = uint16
+//   // msg.is_bigendian = false;
+//   msg.step = image.cols * sizeof(uint16_t);
+
+//   // Copy data into fixed-size array
+//   std::memcpy(msg.data.data(), image.data, 252672 * sizeof(uint16_t));
+
+//   // Publish
+//   image_pub->publish(std::move(loaned_msg));
+// }
+
 void publish_image_msg(
-    rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr image_pub,
-    const cv::Mat &image, const std::string &frame_id = "map") {
-  if (image.empty())
-    return;
-  // Borrow loaned message
-  auto loaned_msg = image_pub->borrow_loaned_message();
-  auto &msg = loaned_msg.get();
-
-  int default_width = msg.width;
-  int default_height = msg.height;
-
-  if (image.cols != default_width || image.rows != default_height) {
-    RCLCPP_ERROR_STREAM(rclcpp::get_logger("image_pub"),
-                        "Image size must be " << default_width << "x"
-                                              << default_height);
+    const rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& image_pub,
+    const cv::Mat& image,
+    const std::string& frame_id = "map")
+{
+  if (image.empty()) {
+    RCLCPP_WARN(rclcpp::get_logger("image_pub"), "Empty image, skipping publish.");
     return;
   }
 
-  if (image.type() != CV_16UC1) {
-    RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
-                 "Image must be CV_16UC1 (uint16)!");
-    return;
-  }
+  sensor_msgs::msg::Image msg;
 
   // Header
   msg.header.stamp = rclcpp::Clock().now();
   msg.header.frame_id = frame_id;
 
-  // Metadata
-  // msg.height = image.rows;
-  // msg.width = image.cols;
-  msg.encoding = 0; // 0 = uint16
-  // msg.is_bigendian = false;
-  msg.step = image.cols * sizeof(uint16_t);
+  // Dimensions
+  msg.height = image.rows;
+  msg.width  = image.cols;
 
-  // Copy data into fixed-size array
-  std::memcpy(msg.data.data(), image.data, 252672 * sizeof(uint16_t));
+  // Encoding + step
+  switch (image.type()) {
+    case CV_8UC1:
+      msg.encoding = "mono8";
+      msg.step = image.cols * sizeof(uint8_t);
+      break;
+
+    case CV_8UC3:
+      msg.encoding = "bgr8";
+      msg.step = image.cols * 3 * sizeof(uint8_t);
+      break;
+
+    case CV_16UC1:
+      msg.encoding = "16UC1";
+      msg.step = image.cols * sizeof(uint16_t);
+      break;
+
+    default:
+      RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
+                   "Unsupported image type: %d", image.type());
+      return;
+  }
+
+  msg.is_bigendian = false;
+
+  // Copy data
+  size_t size = msg.step * msg.height;
+  msg.data.resize(size);
+  std::memcpy(msg.data.data(), image.data, size);
 
   // Publish
-  image_pub->publish(std::move(loaned_msg));
+  image_pub->publish(msg);
 }
+
 void publish_depth_msg(
     rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr pub,
     const cv::Mat &depth_mat, const std::string &frame_id = "map",

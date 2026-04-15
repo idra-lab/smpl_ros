@@ -121,18 +121,20 @@ int main(int argc, char **argv) {
   qos_reliable.reliable();
 
   // ------------------ ROS Publishers ------------------
-  auto smpl_pub = node->create_publisher<smpl_msgs::msg::Smpl>("/skeleton_tracker",
-                                                               qos_reliable);
+  auto smpl_pub = node->create_publisher<smpl_msgs::msg::Smpl>(
+      "/skeleton_tracker", qos_reliable);
   auto cloud_pub = node->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/human_cloud", qos_sensor);
   // Image publisher (for visualization/debugging)
-  std::vector<rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr>
-      image_pubs;
+  // std::vector<rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr>
+  //     image_pubs;
+  std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> image_pubs;
   if (publish_image) {
     RCLCPP_INFO(node->get_logger(), "Image publishing enabled.");
     // create one publisher per camera
     for (int i = 0; i < num_cameras; i++) {
-      auto pub = node->create_publisher<smpl_msgs::msg::FixedSizeImage>(
+      // auto pub = node->create_publisher<smpl_msgs::msg::FixedSizeImage>(
+      auto pub = node->create_publisher<sensor_msgs::msg::Image>(
           "/camera" + std::to_string(i + 1) + "/image", qos_sensor);
       image_pubs.push_back(pub);
     }
@@ -181,7 +183,8 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  if (num_cameras > 0 && static_cast<int>(configurations.size()) > num_cameras) {
+  if (num_cameras > 0 &&
+      static_cast<int>(configurations.size()) > num_cameras) {
     RCLCPP_INFO(node->get_logger(),
                 "Limiting cameras from %ld to %d (num_cameras parameter)",
                 configurations.size(), num_cameras);
@@ -194,20 +197,43 @@ int main(int argc, char **argv) {
   int id_ = 0, gpu_id = 0, nb_gpu = 0;
   cudaGetDeviceCount(&nb_gpu);
 
-  for (auto conf : configurations) {
+  // for (auto conf : configurations) {
+  //   if (conf.communication_parameters.getType() ==
+  //       sl::CommunicationParameters::COMM_TYPE::INTRA_PROCESS) {
+  //     gpu_id = id_ % nb_gpu;
+  //     if (!clients[id_].open(conf.input_type,
+  //                            sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD,
+  //                            resolution, &trigger, gpu_id))
+  //       continue;
+  //     id_++;
+  //   }
+  // }
+  std::vector<bool> camera_available(configurations.size(), false);
+
+  for (size_t i = 0; i < configurations.size(); i++) {
+    auto &conf = configurations[i];
     if (conf.communication_parameters.getType() ==
         sl::CommunicationParameters::COMM_TYPE::INTRA_PROCESS) {
-      gpu_id = id_ % nb_gpu;
-      if (!clients[id_].open(conf.input_type,
-                             sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD,
-                             resolution, &trigger, gpu_id))
-        continue;
-      id_++;
+
+      int gpu_id = i % nb_gpu;
+
+      if (clients[i].open(conf.input_type,
+                          sl::COORDINATE_SYSTEM::RIGHT_HANDED_Z_UP_X_FWD,
+                          resolution, &trigger, gpu_id)) {
+        camera_available[i] = true;
+        clients[i].start();
+      } else {
+        RCLCPP_WARN(node->get_logger(), "Camera %d NOT available (SN %d)", i,
+                    conf.serial_number);
+      }
     }
   }
 
-  for (auto &client : clients)
-    client.start();
+  // for (size_t i = 0; i < clients.size(); i++) {
+  //   if (camera_available[i]) {
+  //     clients[i].start();
+  //   }
+  // }
 
   // Fusion initialization
   sl::InitFusionParameters init_params;
@@ -225,37 +251,55 @@ int main(int argc, char **argv) {
 
   std::vector<sl::CameraIdentifier> cameras;
   std::vector<int> cam_ids;
-  for (auto &conf : configurations) {
+  std::vector<std::string> cam_frames;
+  for (size_t i = 0; i < configurations.size(); i++) {
+    auto &conf = configurations[i];
     auto T = slTransformToEigen(conf.pose);
     T_cams_extrinsics.push_back(T);
-    sl::CameraIdentifier uuid(conf.serial_number);
-    fusion.updatePose(uuid, conf.pose);
-    if (fusion.subscribe(uuid, conf.communication_parameters, conf.pose,
-                         conf.override_gravity) ==
-        sl::FUSION_ERROR_CODE::SUCCESS)
-      cameras.push_back(uuid);
-    cam_ids.push_back(conf.serial_number);
-  }
-  std::vector<std::string> cam_frames;
 
-  for (int i = 0; i < clients.size(); i++) {
-    auto cam_info = clients[i]
-                        .zed.getCameraInformation()
-                        .camera_configuration.calibration_parameters;
-    auto conf = configurations[i];
-    // print fx fy cx cy
-    RCLCPP_INFO(
-        node->get_logger(),
-        "Camera SN %d: Intrinsics (fx, fy, cx, cy) = %.2f x %.2f x %.2f x %.2f",
-        conf.serial_number, cam_info.left_cam.fx, cam_info.left_cam.fy,
-        cam_info.left_cam.cx, cam_info.left_cam.cy);
-    RCLCPP_INFO_STREAM(node->get_logger(), "Camera SN "
-                                               << conf.serial_number
-                                               << ": Extrinsics matrix:\n"
-                                               << T_cams_extrinsics[i]);
-    std::string frame_name = "cam" + std::to_string(i + 1) + "_" +
-                             std::to_string(conf.serial_number);
+    std::string frame_name;
+    if (camera_available[i]) {
+      RCLCPP_INFO(node->get_logger(), "Camera %d available with SN %d", i,
+                  conf.serial_number);
+      auto cam_info = clients[i]
+                          .zed.getCameraInformation()
+                          .camera_configuration.calibration_parameters;
+
+      RCLCPP_INFO(node->get_logger(),
+                  "Camera SN %d: Intrinsics (fx, fy, cx, cy) = %.2f x %.2f x "
+                  "%.2f x %.2f",
+                  conf.serial_number, cam_info.left_cam.fx,
+                  cam_info.left_cam.fy, cam_info.left_cam.cx,
+                  cam_info.left_cam.cy);
+
+      RCLCPP_INFO_STREAM(node->get_logger(), "Camera SN "
+                                                 << conf.serial_number
+                                                 << ": Extrinsics matrix:\n"
+                                                 << T);
+
+      frame_name = "cam" + std::to_string(i + 1) + "_" +
+                   std::to_string(conf.serial_number);
+    } else {
+      RCLCPP_WARN(node->get_logger(),
+                  "Camera %d not available, skipping camera info/logging",
+                  i + 1);
+      frame_name = "cam" + std::to_string(i + 1) + "_na"; // placeholder
+    }
+
     cam_frames.push_back(frame_name);
+
+    if (camera_available[i]) {
+      // fusion subscribe solo se camera disponibile
+      sl::CameraIdentifier uuid(conf.serial_number);
+      fusion.updatePose(uuid, conf.pose);
+      if (fusion.subscribe(uuid, conf.communication_parameters, conf.pose,
+                           conf.override_gravity) ==
+          sl::FUSION_ERROR_CODE::SUCCESS) {
+        cameras.push_back(uuid);
+      }
+    }
+
+    cam_ids.push_back(conf.serial_number); // ordine fisso
   }
   // ------------------  Per-camera publishers ------------------
   // rclcpp::QoS camera_info_qos(1);
@@ -270,6 +314,8 @@ int main(int argc, char **argv) {
       cam_info_pubs;
 
   for (int i = 0; i < clients.size(); i++) {
+    if (!camera_available[i])
+      continue;
     auto pub = node->create_publisher<sensor_msgs::msg::CameraInfo>(
         cam_frames[i] + "/camera_info", camera_info_qos);
     cam_info_pubs.push_back(pub);
@@ -292,6 +338,8 @@ int main(int argc, char **argv) {
                 "Per-camera point cloud publishing enabled.");
     // Create one publisher per camera
     for (size_t i = 0; i < cam_ids.size(); ++i) {
+      if (!camera_available[i])
+        continue;
       std::string topic = cam_frames[i] + "/point_cloud";
       auto pub = node->create_publisher<sensor_msgs::msg::PointCloud2>(
           topic, qos_sensor);
@@ -321,9 +369,11 @@ int main(int argc, char **argv) {
   if (publish_human_depth_map) {
     RCLCPP_INFO(node->get_logger(), "Depth map publishing enabled.");
     for (size_t i = 0; i < cam_frames.size(); ++i) {
+      if (!camera_available[i])
+        continue;
       std::string topic = cam_frames[i] + "/depth";
-      auto pub =
-          node->create_publisher<smpl_msgs::msg::FixedSizeImage>(topic, qos_sensor);
+      auto pub = node->create_publisher<smpl_msgs::msg::FixedSizeImage>(
+          topic, qos_sensor);
       depth_pubs.push_back(pub);
 
       RCLCPP_INFO(node->get_logger(), "Depth topic: %s", topic.c_str());
@@ -393,6 +443,8 @@ int main(int argc, char **argv) {
     if (publish_merged_point_cloud || publish_separate_point_clouds ||
         publish_human_depth_map || (publish_image && overlay_yolo_mask)) {
       for (int i = 0; i < cameras.size(); i++) {
+        if (!camera_available[i])
+          continue;
         clients[i].getYoloPredictionMask(yolo_net, yolov8Seg, human_masks[i],
                                          human_bboxes[i],
                                          erode_body_mask_kernel_size);
@@ -401,6 +453,8 @@ int main(int argc, char **argv) {
 
     if (publish_merged_point_cloud) {
       for (int i = 0; i < cameras.size(); i++) {
+        if (!camera_available[i])
+          continue;
         // get points, colors and normals
         if (!human_masks[i].empty()) {
           auto pcn = clients[i].getFilteredPointCloud(
@@ -432,6 +486,8 @@ int main(int argc, char **argv) {
     if (publish_separate_point_clouds) {
       // publish pc on separate topics
       for (int i = 0; i < cameras.size(); i++) {
+        if (!camera_available[i])
+          continue;
         if (!human_masks[i].empty()) {
           auto pcn = clients[i].getFilteredPointCloud(
               identity, human_masks[i], human_bboxes[i], include_normals);
@@ -442,6 +498,8 @@ int main(int argc, char **argv) {
     }
     if (publish_human_depth_map) {
       for (size_t i = 0; i < clients.size(); ++i) {
+        if (!camera_available[i])
+          continue;
         if (!human_masks[i].empty()) {
           cv::Mat depth_map =
               clients[i].getFilteredDepthMap(human_masks[i], human_bboxes[i]);
@@ -472,7 +530,8 @@ int main(int argc, char **argv) {
     // Publish RGB image if requested
     if (publish_image || visualize_image) {
       for (size_t i = 0; i < clients.size(); ++i) {
-
+        if (!camera_available[i])
+          continue;
         sl::Mat zed_image;
         if (clients[i].zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
             sl::ERROR_CODE::SUCCESS) {
@@ -534,6 +593,8 @@ int main(int argc, char **argv) {
     if (publish_body) {
       // Prepare per-camera BodyData vector
       for (size_t i = 0; i < cameras.size(); i++) {
+        if (!camera_available[i])
+          continue;
         clients[i].zed.retrieveBodies(detected_bodies[i]);
         // timer.tok((std::string("Bodies retrieval time for camera ") +
         //            std::to_string(cam_ids[i]))
@@ -563,7 +624,8 @@ int main(int argc, char **argv) {
       raw_bodies_vector.clear();
 
       // Build and publish SMPL message
-      auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas, node->get_clock());
+      auto msg =
+          buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas, node->get_clock());
       // timer.tok("SMPL message building time");
       smpl_pub->publish(msg);
       // timer.tok("SMPL message publishing time");

@@ -3,7 +3,7 @@ smpl_publisher_node:
     calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/two_cams_fusion_config.json"
     yolo_model_path: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/yolov8s-seg.onnx"
     resolution: "2208x1242" 
-    
+    num_cameras: 1    
     # resolution: "1280x720"
     # resolution: "672x376"
     publish_merged_point_cloud: false # whether to publish a single merged point cloud of all cameras or separate point clouds for each camera
