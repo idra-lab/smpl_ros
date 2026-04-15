@@ -1,63 +1,24 @@
 #pragma once
+// YOLOE via YOLOs-CPP — replaces the old YOLOv8 OpenCV-DNN implementation.
+// The ONNX (yoloe-26n-seg.onnx) was exported with set_classes(["person"]),
+// so class 0 == "person" is baked into the model weights.
+
+#include "yolos/tasks/yoloe.hpp"
 #include <iostream>
-#include <opencv2/opencv.hpp>
+#include <memory>
+#include <string>
+#include <vector>
 
-#include "yolov8_utils.h"
-// Credits to https://github.com/UNeedCryDear/yolov5-seg-opencv-onnxruntime-cpp
+using YoloeSegDetector = yolos::yoloe::YOLOESegDetector;
 
-class Yolov8Seg {
-public:
-  Yolov8Seg() {}
-  ~Yolov8Seg() {}
-
-  bool ReadModel(cv::dnn::Net &net, std::string &netPath, bool isCuda);
-  bool Detect(cv::Mat &srcImg, cv::dnn::Net &net,
-              std::vector<OutputParams> &output);
-
-  //类别名，自己的模型需要修改此项
-  std::vector<std::string> _className = {
-      "person",        "bicycle",      "car",
-      "motorcycle",    "airplane",     "bus",
-      "train",         "truck",        "boat",
-      "traffic light", "fire hydrant", "stop sign",
-      "parking meter", "bench",        "bird",
-      "cat",           "dog",          "horse",
-      "sheep",         "cow",          "elephant",
-      "bear",          "zebra",        "giraffe",
-      "backpack",      "umbrella",     "handbag",
-      "tie",           "suitcase",     "frisbee",
-      "skis",          "snowboard",    "sports ball",
-      "kite",          "baseball bat", "baseball glove",
-      "skateboard",    "surfboard",    "tennis racket",
-      "bottle",        "wine glass",   "cup",
-      "fork",          "knife",        "spoon",
-      "bowl",          "banana",       "apple",
-      "sandwich",      "orange",       "broccoli",
-      "carrot",        "hot dog",      "pizza",
-      "donut",         "cake",         "chair",
-      "couch",         "potted plant", "bed",
-      "dining table",  "toilet",       "tv",
-      "laptop",        "mouse",        "remote",
-      "keyboard",      "cell phone",   "microwave",
-      "oven",          "toaster",      "sink",
-      "refrigerator",  "book",         "clock",
-      "vase",          "scissors",     "teddy bear",
-      "hair drier",    "toothbrush"};
-  int _netWidth = 640;  // ONNX图片输入宽度
-  int _netHeight = 640; // ONNX图片输入高度
-
-private:
-  float _classThreshold = 0.25;
-  float _nmsThreshold = 0.45;
-  float _maskThreshold = 0.5;
-};
-
-inline cv::dnn::Net LoadYOLOModel(Yolov8Seg &yolov8Seg, std::string &model_path) {
-  cv::dnn::Net net;
-  if (!yolov8Seg.ReadModel(net, model_path, true)) {
-    std::cerr << "YOLO model load failed!" << std::endl;
-    exit(-1);
-  }
-  std::cout << "YOLOv8 model loaded successfully!" << std::endl;
-  return net;
+/// Load a YOLOE segmentation model.  class_names must match the vocabulary
+/// that was passed to model.set_classes() at ONNX export time.
+inline std::unique_ptr<YoloeSegDetector>
+LoadYOLOModel(const std::string &model_path,
+              const std::vector<std::string> &class_names = {"person"},
+              bool use_gpu = true) {
+  auto det = std::make_unique<YoloeSegDetector>(model_path, class_names,
+                                                use_gpu, /*agnosticNms=*/true);
+  std::cout << "YOLOE model loaded: " << model_path << std::endl;
+  return det;
 }

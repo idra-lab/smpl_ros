@@ -5,7 +5,6 @@
 #include "yolov8_seg.h"
 #include <Eigen/Dense>
 #include <condition_variable>
-#include <opencv2/dnn.hpp>
 #include <sl/Camera.hpp>
 #include <sl/Fusion.hpp>
 #include <thread>
@@ -47,7 +46,7 @@ public:
   void stop();
   void setStartSVOPosition(unsigned pos);
 
-  bool getYoloPredictionMask(cv::dnn::Net &net, Yolov8Seg &yolov8Seg,
+  bool getYoloPredictionMask(YoloeSegDetector &detector,
                              cv::Mat &out_mask, cv::Rect &out_bbox,
                              int erode_kernel_size);
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>

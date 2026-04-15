@@ -1,7 +1,7 @@
 smpl_publisher_node:
   ros__parameters:
     calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/two_cams_fusion_config.json"
-    yolo_model_path: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/yolov8s-seg.onnx"
+    yolo_model_path: "/home/nardi/YOLOs-CPP/models/yoloe-26n-seg.onnx"
     resolution: "2208x1242" 
     num_cameras: 1    
     # resolution: "1280x720"

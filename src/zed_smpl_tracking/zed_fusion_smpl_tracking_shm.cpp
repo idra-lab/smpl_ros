@@ -491,11 +491,10 @@ int main(int argc, char **argv) {
   bt_rt.skeleton_minimum_allowed_keypoints = 7;
   bt_rt.skeleton_minimum_allowed_camera = cameras.size() / 2.0;
 
-  // ── YOLO ─────────────────────────────────────────────────────────────────
-  Yolov8Seg yolov8Seg;
-  cv::dnn::Net yolo_net;
+  // ── YOLOE ────────────────────────────────────────────────────────────────
+  std::unique_ptr<YoloeSegDetector> yoloe_detector;
   if (!yolo_model_path.empty())
-    yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
+    yoloe_detector = LoadYOLOModel(yolo_model_path);
 
   // ── Shared memory init ───────────────────────────────────────────────────
   void *shm_pc = shm_create(SHM_PC_NAME, shm_pc_total_size());
@@ -549,7 +548,8 @@ int main(int argc, char **argv) {
     // Point clouds
     auto identity = Eigen::Matrix4d::Identity();
     for (int i = 0; i < static_cast<int>(clients.size()); ++i) {
-      if (clients[i].getYoloPredictionMask(yolo_net, yolov8Seg, human_masks[i],
+      if (yoloe_detector &&
+          clients[i].getYoloPredictionMask(*yoloe_detector, human_masks[i],
                                            human_bboxes[i], erode_kernel)) {
         auto pcn = clients[i].getFilteredPointCloud(
             identity, human_masks[i], human_bboxes[i], include_normals);

@@ -406,16 +406,16 @@ int main(int argc, char **argv) {
   sl::Bodies fused_bodies;
   std::vector<sl::BodyData> raw_bodies_vector;
 
-  Yolov8Seg yolov8Seg;
-  cv::dnn::Net yolo_net;
+  std::unique_ptr<YoloeSegDetector> yoloe_detector;
   if (publish_merged_point_cloud || overlay_yolo_mask) {
     if (yolo_model_path.empty()) {
       RCLCPP_WARN(
           node->get_logger(),
           "overlay_yolo_mask or publish_merged_point_cloud is enabled but "
           "yolo_model_path is empty.");
+    } else {
+      yoloe_detector = LoadYOLOModel(yolo_model_path);
     }
-    yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
   }
 
   std::vector<sl::Bodies> detected_bodies;
@@ -445,9 +445,10 @@ int main(int argc, char **argv) {
       for (int i = 0; i < cameras.size(); i++) {
         if (!camera_available[i])
           continue;
-        clients[i].getYoloPredictionMask(yolo_net, yolov8Seg, human_masks[i],
-                                         human_bboxes[i],
-                                         erode_body_mask_kernel_size);
+        if (yoloe_detector)
+          clients[i].getYoloPredictionMask(*yoloe_detector, human_masks[i],
+                                           human_bboxes[i],
+                                           erode_body_mask_kernel_size);
       }
     }
 

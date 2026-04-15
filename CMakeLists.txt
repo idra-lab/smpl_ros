@@ -34,11 +34,14 @@ find_package(OpenCV 4.11)
 
 set(ZED_LIBS ${ZED_LIBRARIES} ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY})
 
-# Yolo
-add_library(yolov8 src/zed_smpl_tracking/yolov8/yolov8_seg.cpp src/zed_smpl_tracking/yolov8/yolov8_utils.cpp)
-target_include_directories(yolov8 PUBLIC include/zed_smpl_tracking/yolov8 ${CUDA_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(yolov8 ${CUDA_CUDA_LIBRARY} ${CUDA_CUDART_LIBRARY}
-  ${OpenCV_LIBRARIES})
+# YOLOs-CPP (header-only; requires ONNX Runtime)
+set(YOLOS_CPP_DIR /home/nardi/YOLOs-CPP)
+set(ONNXRUNTIME_DIR ${YOLOS_CPP_DIR}/onnxruntime-linux-x64-gpu-1.20.1)
+set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
+set(YOLOE_INCLUDE_DIRS
+    ${YOLOS_CPP_DIR}/include
+    ${ONNXRUNTIME_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/zed_smpl_tracking/yolov8)
 
 # Executable
 add_executable(fitting_smpl src/body_fitting/fitting_smpl_ros.cpp)
@@ -91,6 +94,7 @@ target_include_directories(zed_smpl_tracking PUBLIC ${GLEW_INCLUDE_DIRS})
 target_include_directories(zed_smpl_tracking PUBLIC ${GLUT_INCLUDE_DIR})
 target_include_directories(zed_smpl_tracking PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(zed_smpl_tracking PUBLIC ${OpenCV_INCLUDE_DIRS})
+target_include_directories(zed_smpl_tracking PUBLIC ${YOLOE_INCLUDE_DIRS})
 link_directories(zed_smpl_tracking ${ZED_LIBRARY_DIR})
 link_directories(zed_smpl_tracking ${CUDA_LIBRARY_DIRS})
 link_directories(zed_smpl_tracking ${GLEW_LIBRARY_DIRS})
@@ -99,23 +103,24 @@ link_directories(zed_smpl_tracking ${OpenGL_LIBRARY_DIRS})
 link_directories(zed_smpl_tracking ${OpenCV_LIBRARY_DIRS})
 target_link_libraries(zed_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
   Eigen3::Eigen
-  yolov8
+  ${ONNXRUNTIME_LIB}
   torchure_smplx::smplx
   ${TORCH_LIBRARIES}
 )
 
-# ZED SMPL Tracking
+# ZED SMPL Tracking (fusion)
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${CUDA_INCLUDE_DIRS})
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${ZED_INCLUDE_DIRS})
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(zed_fusion_smpl_tracking PUBLIC ${OpenCV_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking PUBLIC ${YOLOE_INCLUDE_DIRS})
 link_directories(zed_fusion_smpl_tracking ${ZED_LIBRARY_DIR})
 link_directories(zed_fusion_smpl_tracking ${CUDA_LIBRARY_DIRS})
 link_directories(zed_fusion_smpl_tracking ${OpenGL_LIBRARY_DIRS})
 link_directories(zed_fusion_smpl_tracking ${OpenCV_LIBRARY_DIRS})
 target_link_libraries(zed_fusion_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
   Eigen3::Eigen
-  yolov8
+  ${ONNXRUNTIME_LIB}
   torchure_smplx::smplx
   ${TORCH_LIBRARIES}
 )
@@ -124,13 +129,14 @@ target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${CUDA_INCLUDE_DI
 target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${ZED_INCLUDE_DIRS})
 target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${OpenCV_INCLUDE_DIRS})
+target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${YOLOE_INCLUDE_DIRS})
 link_directories(zed_fusion_smpl_tracking_shm ${ZED_LIBRARY_DIR})
 link_directories(zed_fusion_smpl_tracking_shm ${CUDA_LIBRARY_DIRS})
 link_directories(zed_fusion_smpl_tracking_shm ${OpenGL_LIBRARY_DIRS})
 link_directories(zed_fusion_smpl_tracking_shm ${OpenCV_LIBRARY_DIRS})
 target_link_libraries(zed_fusion_smpl_tracking_shm ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
   Eigen3::Eigen
-  yolov8
+  ${ONNXRUNTIME_LIB}
   torchure_smplx::smplx
   ${TORCH_LIBRARIES}
 )

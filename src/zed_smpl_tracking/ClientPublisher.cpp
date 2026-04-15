@@ -115,12 +115,13 @@ void ClientPublisher::setStartSVOPosition(unsigned pos) {
   zed.setSVOPosition(pos);
 }
 
-// Use yolo to predict human mask from RGB image
-bool ClientPublisher::getYoloPredictionMask(cv::dnn::Net &net,
-                                        Yolov8Seg &yolov8Seg,
-                                        cv::Mat &out_mask,
-                                        cv::Rect &out_bbox,
-                                        int erode_kernel_size = 5) {
+// Use YOLOE to predict human mask from RGB image.
+// out_mask is bbox-relative (CV_8UC1, size == out_bbox) to match downstream
+// usage in getFilteredPointCloud / getFilteredDepthMap.
+bool ClientPublisher::getYoloPredictionMask(YoloeSegDetector &detector,
+                                            cv::Mat &out_mask,
+                                            cv::Rect &out_bbox,
+                                            int erode_kernel_size) {
   sl::Mat sl_image;
   if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS)
     return false;
@@ -129,14 +130,16 @@ bool ClientPublisher::getYoloPredictionMask(cv::dnn::Net &net,
                   sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
   cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
 
-  std::vector<OutputParams> detections;
-  if (!yolov8Seg.Detect(cvImage, net, detections))
+  auto segs = detector.segment(cvImage, 0.35f, 0.45f);
+  if (segs.empty())
     return false;
 
-  for (auto &det : detections) {
-    if (det.id == 0) {
-      out_bbox = det.box;
-      out_mask = det.boxMask.clone();
+  for (auto &seg : segs) {
+    if (seg.classId == 0) {  // person
+      out_bbox = cv::Rect(seg.box.x, seg.box.y, seg.box.width, seg.box.height);
+      // seg.mask is full-image size; extract the bbox region for downstream
+      // code that indexes the mask relative to the bounding box.
+      out_mask = seg.mask(out_bbox).clone();
       break;
     }
   }
@@ -144,9 +147,12 @@ bool ClientPublisher::getYoloPredictionMask(cv::dnn::Net &net,
   if (out_mask.empty())
     return false;
 
-  cv::erode(out_mask, out_mask,
-            cv::getStructuringElement(
-                cv::MORPH_RECT, cv::Size(erode_kernel_size, erode_kernel_size)));
+  if (erode_kernel_size > 0) {
+    cv::erode(out_mask, out_mask,
+              cv::getStructuringElement(
+                  cv::MORPH_RECT,
+                  cv::Size(erode_kernel_size, erode_kernel_size)));
+  }
   return true;
 }
 

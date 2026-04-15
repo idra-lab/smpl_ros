@@ -82,13 +82,12 @@ int main(int argc, char **argv) {
   }
   client.start();
   RCLCPP_INFO(node->get_logger(), "ZED camera opened successfully");
-  // Load YOLO model if requested
-  Yolov8Seg yolov8Seg;
-  cv::dnn::Net yolo_net;
+  // Load YOLOE model if requested
+  std::unique_ptr<YoloeSegDetector> yoloe_detector;
   if (publish_human_point_cloud && !yolo_model_path.empty()) {
-    RCLCPP_INFO(node->get_logger(), "Loading YOLO model from %s",
+    RCLCPP_INFO(node->get_logger(), "Loading YOLOE model from %s",
                 yolo_model_path.c_str());
-    yolo_net = LoadYOLOModel(yolov8Seg, yolo_model_path);
+    yoloe_detector = LoadYOLOModel(yolo_model_path);
   }
 
   Eigen::Matrix4d T_SMPL_TO_ROS = smpl_to_ros_transform();
@@ -110,8 +109,9 @@ int main(int argc, char **argv) {
       // clear mask and bbox for each frame
       human_mask = cv::Mat();
       human_bbox = cv::Rect();
-      if (client.getYoloPredictionMask(yolo_net, yolov8Seg, human_mask,
-                                       human_bbox, 0)) {
+      if (yoloe_detector && client.getYoloPredictionMask(*yoloe_detector,
+                                                         human_mask,
+                                                         human_bbox, 0)) {
         auto pc_data = client.getFilteredPointCloud(identity, human_mask,
                                                  human_bbox, include_normals);
       }
