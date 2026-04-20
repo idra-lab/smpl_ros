@@ -92,7 +92,7 @@ void ClientPublisher::work() {
   zed.setBodyTrackingRuntimeParameters(body_runtime_parameters);
 
   sl::RuntimeParameters rt;
-  rt.confidence_threshold = 50;
+  rt.confidence_threshold = 60;
 
   // In this sample we use a dummy thread to process the ZED data.
   // you can replace it by your own application and use the ZED like you use to,
@@ -118,44 +118,81 @@ void ClientPublisher::setStartSVOPosition(unsigned pos) {
 // Use YOLOE to predict human mask from RGB image.
 // out_mask is bbox-relative (CV_8UC1, size == out_bbox) to match downstream
 // usage in getFilteredPointCloud / getFilteredDepthMap.
-bool ClientPublisher::getYoloPredictionMask(YoloeSegDetector &detector,
-                                            cv::Mat &out_mask,
-                                            cv::Rect &out_bbox,
-                                            int erode_kernel_size) {
+bool ClientPublisher::getYoloPredictionMask(
+    YoloeSegDetector &detector, cv::Mat &out_image, cv::Mat &out_mask,
+    cv::Rect &out_bbox, float conf_threshold, float iou_threshold,
+    int erode_kernel_size, int rotation_angle) {
   sl::Mat sl_image;
   if (zed.retrieveImage(sl_image, sl::VIEW::LEFT) != sl::ERROR_CODE::SUCCESS)
     return false;
 
-  cv::Mat cvImage(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
-                  sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
-  cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+  // Wrap ZED buffer (BGRA) and convert to BGR. Use a separate local name to
+  // avoid shadowing the out_image reference parameter.
+  cv::Mat bgra_image(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
+                     sl_image.getPtr<sl::uchar4>(sl::MEM::CPU));
 
-  auto segs = detector.segment(cvImage, 0.35f, 0.45f);
-  if (segs.empty())
+  cv::Mat bgr_image;
+  cv::cvtColor(bgra_image, bgr_image, cv::COLOR_BGRA2BGR);
+
+  out_image = bgr_image.clone();
+
+  // Optionally rotate before segmentation so supine body appears upright.
+  // rotation_angle: 0 (none), 90 (CW), 180, 270 (CW == 90 CCW).
+  cv::Mat bgr_for_seg;
+  int fwd_code = -1, inv_code = -1;
+  if (rotation_angle == 90) {
+    fwd_code = cv::ROTATE_90_CLOCKWISE;
+    inv_code = cv::ROTATE_90_COUNTERCLOCKWISE;
+  } else if (rotation_angle == 180) {
+    fwd_code = cv::ROTATE_180;
+    inv_code = cv::ROTATE_180;
+  } else if (rotation_angle == 270) {
+    fwd_code = cv::ROTATE_90_COUNTERCLOCKWISE;
+    inv_code = cv::ROTATE_90_CLOCKWISE;
+  }
+
+  if (fwd_code >= 0)
+    cv::rotate(bgr_image, bgr_for_seg, fwd_code);
+  else
+    bgr_for_seg = bgr_image;
+
+  auto segs = detector.segment(bgr_for_seg, conf_threshold, iou_threshold);
+  if (segs.empty()) {
     return false;
+  }
 
   for (auto &seg : segs) {
-    if (seg.classId == 0) {  // person
-      out_bbox = cv::Rect(seg.box.x, seg.box.y, seg.box.width, seg.box.height);
-      // seg.mask is full-image size; extract the bbox region for downstream
-      // code that indexes the mask relative to the bounding box.
-      out_mask = seg.mask(out_bbox).clone();
+    if (seg.classId == 0) { // person
+      if (inv_code >= 0) {
+        // Rotate mask back to original orientation, recompute bbox
+        cv::Mat mask_back;
+        cv::rotate(seg.mask, mask_back, inv_code);
+        std::vector<cv::Point> pts;
+        cv::findNonZero(mask_back, pts);
+        if (pts.empty())
+          continue;
+        out_bbox = cv::boundingRect(pts);
+        out_mask = mask_back(out_bbox).clone();
+      } else {
+        out_bbox = cv::Rect(seg.box.x, seg.box.y, seg.box.width, seg.box.height);
+        out_mask = seg.mask(out_bbox).clone();
+      }
       break;
     }
   }
 
-  if (out_mask.empty())
+  if (out_mask.empty()) {
     return false;
+  }
 
   if (erode_kernel_size > 0) {
-    cv::erode(out_mask, out_mask,
-              cv::getStructuringElement(
-                  cv::MORPH_RECT,
-                  cv::Size(erode_kernel_size, erode_kernel_size)));
+    cv::erode(
+        out_mask, out_mask,
+        cv::getStructuringElement(
+            cv::MORPH_RECT, cv::Size(erode_kernel_size, erode_kernel_size)));
   }
   return true;
 }
-
 
 std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
 ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
@@ -232,14 +269,13 @@ ClientPublisher::getFilteredPointCloud(const Eigen::Matrix4d &T,
 }
 
 cv::Mat ClientPublisher::getFilteredDepthMap(const cv::Mat &human_mask,
-                                             const cv::Rect &human_bbox)
-{
+                                             const cv::Rect &human_bbox) {
   sl::Mat depth_mat;
   if (zed.retrieveMeasure(depth_mat, sl::MEASURE::DEPTH) !=
       sl::ERROR_CODE::SUCCESS)
     return cv::Mat();
 
-  int width  = depth_mat.getWidth();
+  int width = depth_mat.getWidth();
   int height = depth_mat.getHeight();
 
   cv::Mat depthMap(height, width, CV_32FC1,
@@ -255,14 +291,14 @@ cv::Mat ClientPublisher::getFilteredDepthMap(const cv::Mat &human_mask,
   int mask_offset_y = clipped_bbox.y - human_bbox.y;
 
   for (int y = 0; y < clipped_bbox.height; y++) {
-    int img_y  = clipped_bbox.y + y;
+    int img_y = clipped_bbox.y + y;
     int mask_y = mask_offset_y + y;
 
     const float *depth_ptr = depthMap.ptr<float>(img_y);
-    float *out_ptr         = filteredDepth.ptr<float>(img_y);
+    float *out_ptr = filteredDepth.ptr<float>(img_y);
 
     for (int x = 0; x < clipped_bbox.width; x++) {
-      int img_x  = clipped_bbox.x + x;
+      int img_x = clipped_bbox.x + x;
       int mask_x = mask_offset_x + x;
 
       if (human_mask.at<uchar>(mask_y, mask_x) == 0)
@@ -278,8 +314,8 @@ cv::Mat ClientPublisher::getFilteredDepthMap(const cv::Mat &human_mask,
 }
 
 cv::Mat ClientPublisher::overlayPersonMask(const cv::Mat &image,
-                                               const cv::Mat &mask,
-                                               const cv::Rect &bbox) {
+                                           const cv::Mat &mask,
+                                           const cv::Rect &bbox) {
   cv::Mat output = image.clone();
   if (output.empty() || mask.empty())
     return output;

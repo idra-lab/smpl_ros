@@ -1,20 +1,28 @@
 smpl_publisher_node:
   ros__parameters:
-    calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/two_cams_fusion_config.json"
-    yolo_model_path: "/home/nardi/YOLOs-CPP/models/yoloe-26n-seg.onnx"
+    # calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/two_cams_fusion_config.json"
+    calibration_file: "/home/nardi/sensor_fusion_ws/smpl_ros_ws/test.json"
+    yolo_model_path: "/home/nardi/YOLOs-CPP/models/yoloe-26s-seg.onnx"
     # resolution: "640x376" # "1920x1080" # "2208x1242" 
-    num_cameras: 2
     resolution: "1280x720"
+    num_cameras: 2
     # resolution: "672x376"
     publish_merged_point_cloud: false # whether to publish a single merged point cloud of all cameras or separate point clouds for each camera
     publish_separate_point_clouds: false # wheter to publish a point cloud for each camera on separate topics
+    
+    # Body publisher parameters
     publish_human_depth_map: true # whether to publish a depth map with only the human pixels (for visualization purposes)
     publish_image: false # whether to publish the original image
     publish_body: true # whether to publish the body keypoints and smpl parameters
     published_body_filter_voxel_size: 0.01
-    erode_body_mask_kernel_size: 13
-    visualize_image: true
-    overlay_yolo_mask: true
     point_cloud_output_file: "" # only if publish_point_cloud is true
     time_before_saving_pc: 5.0
     smpl_params_file: ""
+
+    # Segmentaion parameters
+    visualize_image: true
+    erode_body_mask_kernel_size: 4
+    yolo_conf_threshold: 0.02
+    yolo_iou_threshold: 0.45
+    yolo_rotation_angle: 90
+    overlay_yolo_mask: true

@@ -2,7 +2,7 @@
 #define __SENDER_RUNNER_HDR__
 
 #include "bodyStruct.hpp"
-#include "yolov8_seg.h"
+#include "yolo_seg.h"
 #include <Eigen/Dense>
 #include <condition_variable>
 #include <sl/Camera.hpp>
@@ -46,9 +46,10 @@ public:
   void stop();
   void setStartSVOPosition(unsigned pos);
 
-  bool getYoloPredictionMask(YoloeSegDetector &detector,
+  bool getYoloPredictionMask(YoloeSegDetector &detector, cv::Mat &out_image,
                              cv::Mat &out_mask, cv::Rect &out_bbox,
-                             int erode_kernel_size);
+                             float conf_threshold, float iou_threshold,
+                             int erode_kernel_size, int rotation_angle = 0);
   std::vector<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>
   getFilteredPointCloud(const Eigen::Matrix4d &T, const cv::Mat &human_mask,
                         const cv::Rect &human_bbox, bool include_normals);

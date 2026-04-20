@@ -646,64 +646,10 @@ void publishPointCloud(
 //   image_pub->publish(std::move(loaned_msg));
 // }
 
-void publish_image_msg(
-    const rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& image_pub,
-    const cv::Mat& image,
-    const std::string& frame_id = "map")
-{
-  if (image.empty()) {
-    RCLCPP_WARN(rclcpp::get_logger("image_pub"), "Empty image, skipping publish.");
-    return;
-  }
-
-  sensor_msgs::msg::Image msg;
-
-  // Header
-  msg.header.stamp = rclcpp::Clock().now();
-  msg.header.frame_id = frame_id;
-
-  // Dimensions
-  msg.height = image.rows;
-  msg.width  = image.cols;
-
-  // Encoding + step
-  switch (image.type()) {
-    case CV_8UC1:
-      msg.encoding = "mono8";
-      msg.step = image.cols * sizeof(uint8_t);
-      break;
-
-    case CV_8UC3:
-      msg.encoding = "bgr8";
-      msg.step = image.cols * 3 * sizeof(uint8_t);
-      break;
-
-    case CV_16UC1:
-      msg.encoding = "16UC1";
-      msg.step = image.cols * sizeof(uint16_t);
-      break;
-
-    default:
-      RCLCPP_ERROR(rclcpp::get_logger("image_pub"),
-                   "Unsupported image type: %d", image.type());
-      return;
-  }
-
-  msg.is_bigendian = false;
-
-  // Copy data
-  size_t size = msg.step * msg.height;
-  msg.data.resize(size);
-  std::memcpy(msg.data.data(), image.data, size);
-
-  // Publish
-  image_pub->publish(msg);
-}
-
 void publish_depth_msg(
     rclcpp::Publisher<smpl_msgs::msg::FixedSizeImage>::SharedPtr pub,
-    const cv::Mat &depth_mat, const std::string &frame_id = "map",
-    const float *normals = nullptr) {
+    const cv::Mat &depth_mat, const cv::Mat &rgb_mat,
+    const std::string &frame_id = "map", const float *normals = nullptr) {
   if (depth_mat.empty()) {
     RCLCPP_WARN(rclcpp::get_logger("depth_pub"), "Depth matrix is empty!");
     return;
@@ -724,10 +670,10 @@ void publish_depth_msg(
   int default_width = msg.width;
   int default_height = msg.height;
 
-  if (depth_mat.cols != default_width || depth_mat.rows != default_height) {
+  if (width != default_width || height != default_height) {
     RCLCPP_ERROR_STREAM(rclcpp::get_logger("image_pub"),
                         "Depth image size must be " << default_width << "x"
-                                              << default_height);
+                                                    << default_height);
     return;
   }
 
@@ -735,15 +681,21 @@ void publish_depth_msg(
   msg.header.stamp = rclcpp::Clock().now();
   msg.header.frame_id = frame_id;
 
-  // Metadata
-  // msg.height = height;
-  // msg.width = width;
-  // msg.encoding = 1; // FLOAT32
-  msg.is_bigendian = false;
-  msg.step = width * sizeof(float);
-
   // Copy depth float data
-  std::memcpy(msg.data.data(), depth_mat.data, height * width * sizeof(float));
+  std::memcpy(msg.depth.data(), depth_mat.data, height * width * sizeof(float));
+
+  // Copy RGB image data if available
+  if (!rgb_mat.empty()) {
+    if (rgb_mat.type() != CV_8UC3) {
+      RCLCPP_ERROR(rclcpp::get_logger("depth_pub"), "RGB must be CV_8UC3");
+      return;
+    }
+
+    cv::Mat rgb_cont = rgb_mat.clone();
+    cv::cvtColor(rgb_cont, rgb_cont, cv::COLOR_BGR2RGB);
+    std::memcpy(msg.rgb.data(), rgb_cont.data, height * width * 3);
+  }
+
 
   // Copy normals if available
   if (normals) {

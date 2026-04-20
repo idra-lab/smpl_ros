@@ -1,5 +1,5 @@
 #pragma once
-// YOLOE via YOLOs-CPP — replaces the old YOLOv8 OpenCV-DNN implementation.
+// YOLOE via YOLOs-CPP
 // The ONNX (yoloe-26n-seg.onnx) was exported with set_classes(["person"]),
 // so class 0 == "person" is baked into the model weights.
 

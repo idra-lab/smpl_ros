@@ -144,12 +144,12 @@ def generate_launch_description():
         )
     )
     return LaunchDescription([
-        # rmw_zenoh_node,
+        rmw_zenoh_node,
         static_tf_broadcaster_node,
         camera_tf_broadcaster_launch,
         rviz_node,
-        model_path_arg,
-        frame_id_arg,
-        smpl_ros_viewer_node,
+        # model_path_arg,
+        # frame_id_arg,
+        # smpl_ros_viewer_node,
         lifecycle_after_rmw
     ])

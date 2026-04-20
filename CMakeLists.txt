@@ -41,7 +41,7 @@ set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
 set(YOLOE_INCLUDE_DIRS
     ${YOLOS_CPP_DIR}/include
     ${ONNXRUNTIME_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/zed_smpl_tracking/yolov8)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/zed_smpl_tracking/yolo)
 
 # Executable
 add_executable(fitting_smpl src/body_fitting/fitting_smpl_ros.cpp)
@@ -53,10 +53,6 @@ add_executable(zed_smpl_tracking
 )
 add_executable(zed_fusion_smpl_tracking
   src/zed_smpl_tracking/zed_fusion_smpl_tracking.cpp
-  src/zed_smpl_tracking/ClientPublisher.cpp
-)
-add_executable(zed_fusion_smpl_tracking_shm
-  src/zed_smpl_tracking/zed_fusion_smpl_tracking_shm.cpp
   src/zed_smpl_tracking/ClientPublisher.cpp
 )
 
@@ -125,21 +121,6 @@ target_link_libraries(zed_fusion_smpl_tracking ${ZED_LIBS} ${UTILS_LIB} ${SPECIA
   ${TORCH_LIBRARIES}
 )
 
-target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${CUDA_INCLUDE_DIRS})
-target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${ZED_INCLUDE_DIRS})
-target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${OpenCV_INCLUDE_DIRS})
-target_include_directories(zed_fusion_smpl_tracking_shm PUBLIC ${YOLOE_INCLUDE_DIRS})
-link_directories(zed_fusion_smpl_tracking_shm ${ZED_LIBRARY_DIR})
-link_directories(zed_fusion_smpl_tracking_shm ${CUDA_LIBRARY_DIRS})
-link_directories(zed_fusion_smpl_tracking_shm ${OpenGL_LIBRARY_DIRS})
-link_directories(zed_fusion_smpl_tracking_shm ${OpenCV_LIBRARY_DIRS})
-target_link_libraries(zed_fusion_smpl_tracking_shm ${ZED_LIBS} ${UTILS_LIB} ${SPECIAL_OS_LIBS} ${OpenCV_LIBRARIES} ${OPENGL_LIBRARIES} ${GLUT_LIBRARIES} ${GLEW_LIBRARIES}
-  Eigen3::Eigen
-  ${ONNXRUNTIME_LIB}
-  torchure_smplx::smplx
-  ${TORCH_LIBRARIES}
-)
 
 
 
@@ -180,7 +161,7 @@ ament_target_dependencies(zed_fusion_smpl_tracking
 )
 
 # Install
-install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking zed_fusion_smpl_tracking zed_fusion_smpl_tracking_shm
+install(TARGETS fitting_smpl fitting_sequence_smpl smpl_ros_viewer zed_smpl_tracking zed_fusion_smpl_tracking
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch rviz config

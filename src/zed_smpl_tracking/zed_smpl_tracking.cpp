@@ -8,12 +8,11 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <thread>
 
+#include "smpl_msgs/msg/fixed_size_image.hpp"
 #include "smpl_msgs/msg/smpl.hpp"
-#include "smpl_msgs/msg/fixed_size_image.hpp"
-#include "smpl_msgs/msg/fixed_size_image.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "utils/json.hpp"
-#include "yolov8_seg.h"
+#include "yolo_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/bodyConverter.hpp"
 #include "zed_smpl_tracking/utils.hpp"
@@ -60,8 +59,8 @@ int main(int argc, char **argv) {
       node->create_publisher<sensor_msgs::msg::PointCloud2>("/human_cloud", 10);
   auto image_pub =
       node->create_publisher<smpl_msgs::msg::FixedSizeImage>("/zed/image", 10);
-  auto depth_map_pub =
-      node->create_publisher<smpl_msgs::msg::FixedSizeImage>("/human_depth_map", 10);
+  auto depth_map_pub = node->create_publisher<smpl_msgs::msg::FixedSizeImage>(
+      "/human_depth_map", 10);
 
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node);
@@ -98,7 +97,7 @@ int main(int argc, char **argv) {
   cv::Rect human_bbox;
   auto identity = Eigen::Matrix4d::Identity();
   bool include_normals = true;
-
+  cv::Mat rgb;
   // ------------------ Main Loop ------------------
   while (rclcpp::ok()) {
     trigger.notifyZED();
@@ -109,11 +108,11 @@ int main(int argc, char **argv) {
       // clear mask and bbox for each frame
       human_mask = cv::Mat();
       human_bbox = cv::Rect();
-      if (yoloe_detector && client.getYoloPredictionMask(*yoloe_detector,
-                                                         human_mask,
-                                                         human_bbox, 0)) {
-        auto pc_data = client.getFilteredPointCloud(identity, human_mask,
-                                                 human_bbox, include_normals);
+      if (yoloe_detector &&
+          client.getYoloPredictionMask(*yoloe_detector, rgb, human_mask,
+                                       human_bbox, 0.15f,0.45f, 0, 0)) {
+        auto pc_data = client.getFilteredPointCloud(
+            identity, human_mask, human_bbox, include_normals);
       }
       if (!pc_data.empty()) {
         publishPointCloud(cloud_pub, pc_data, frame_id);
@@ -134,35 +133,29 @@ int main(int argc, char **argv) {
     if (publish_human_depth_map) {
       cv::Mat depth_map = client.getFilteredDepthMap(human_mask, human_bbox);
       if (!depth_map.empty()) {
-        publish_depth_msg(depth_map_pub, depth_map, frame_id);
+        publish_depth_msg(depth_map_pub, depth_map, rgb, frame_id);
       }
     }
     // Publish RGB image if requested
-    if (publish_image) {
-      sl::Mat zed_image;
-      if (client.zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
-          sl::ERROR_CODE::SUCCESS) {
-        cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
-                        zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
-        cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
-        // publish_image_msg(image_pub, cvImage, frame_id);
-      }
-    }
+    // if (publish_image) {
+    //   publish_image_msg(image_pub, rgb, frame_id);
+    // }
+  }
 
-    // Retrieve body and publish SMPL
-    if (publish_human) {
-      sl::Bodies bodies;
-      sl::BodyTrackingRuntimeParameters body_runtime;
-      body_runtime.detection_confidence_threshold = 40;
-      if (client.zed.retrieveBodies(bodies, body_runtime) ==
-              sl::ERROR_CODE::SUCCESS &&
-          !bodies.body_list.empty()) {
-        std::vector<sl::BodyData> body_vec = {bodies.body_list[0]};
-        std::vector<Body> bodies_out = extractBodyData(body_vec, SMPL_TO_ZED);
-        Body fusedBody = bodies_out[0];
-        auto msg = buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas, node->get_clock());
-        smpl_pub->publish(msg);
-      }
+  // Retrieve body and publish SMPL
+  if (publish_human) {
+    sl::Bodies bodies;
+    sl::BodyTrackingRuntimeParameters body_runtime;
+    body_runtime.detection_confidence_threshold = 40;
+    if (client.zed.retrieveBodies(bodies, body_runtime) ==
+            sl::ERROR_CODE::SUCCESS &&
+        !bodies.body_list.empty()) {
+      std::vector<sl::BodyData> body_vec = {bodies.body_list[0]};
+      std::vector<Body> bodies_out = extractBodyData(body_vec, SMPL_TO_ZED);
+      Body fusedBody = bodies_out[0];
+      auto msg =
+          buildSMPLMessage(fusedBody, T_SMPL_TO_ROS, betas, node->get_clock());
+      smpl_pub->publish(msg);
     }
     // TODO fix
     // if (publish_point_cloud) {

@@ -20,7 +20,7 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "utils/json.hpp"
 #include "utils/voxel_filter.h"
-#include "yolov8_seg.h"
+#include "yolo_seg.h"
 #include "zed_smpl_tracking/ClientPublisher.hpp"
 #include "zed_smpl_tracking/bodyConverter.hpp"
 #include "zed_smpl_tracking/fuseSkeletons.hpp"
@@ -56,6 +56,9 @@ int main(int argc, char **argv) {
   node->declare_parameter<bool>("overlay_yolo_mask", false);
   node->declare_parameter<int>("erode_body_mask_kernel_size", 5);
   node->declare_parameter<double>("published_body_filter_voxel_size", 0.02);
+  node->declare_parameter<float>("yolo_conf_threshold", 0.15f);
+  node->declare_parameter<float>("yolo_iou_threshold", 0.45f);
+  node->declare_parameter<int>("yolo_rotation_angle", 0);
 
   // Print all declared parameters value
   // RCLCPP_INFO(node->get_logger(), "Node parameters:");
@@ -93,6 +96,19 @@ int main(int argc, char **argv) {
       node->get_parameter("published_body_filter_voxel_size").as_double();
   bool publish_separate_point_clouds =
       node->get_parameter("publish_separate_point_clouds").as_bool();
+
+  float yolo_conf_threshold =
+      node->get_parameter("yolo_conf_threshold").as_double();
+  float yolo_iou_threshold =
+      node->get_parameter("yolo_iou_threshold").as_double();
+  int yolo_rotation_angle =
+      node->get_parameter("yolo_rotation_angle").as_int();
+  if (overlay_yolo_mask || visualize_image) {
+    RCLCPP_INFO(node->get_logger(), "Yolo confidence threshold: %.2f",
+                yolo_conf_threshold);
+    RCLCPP_INFO(node->get_logger(), "Yolo IoU threshold: %.2f",
+                yolo_iou_threshold);
+  }
 
   std::vector<double> betas(300, 0.0);
   if (smpl_params_path == "") {
@@ -223,7 +239,7 @@ int main(int argc, char **argv) {
         camera_available[i] = true;
         clients[i].start();
       } else {
-        RCLCPP_WARN(node->get_logger(), "Camera %d NOT available (SN %d)", i,
+        RCLCPP_WARN(node->get_logger(), "Camera %ld NOT available (SN %d)", i,
                     conf.serial_number);
       }
     }
@@ -259,7 +275,7 @@ int main(int argc, char **argv) {
 
     std::string frame_name;
     if (camera_available[i]) {
-      RCLCPP_INFO(node->get_logger(), "Camera %d available with SN %d", i,
+      RCLCPP_INFO(node->get_logger(), "Camera %ld available with SN %d", i,
                   conf.serial_number);
       auto cam_info = clients[i]
                           .zed.getCameraInformation()
@@ -281,7 +297,7 @@ int main(int argc, char **argv) {
                    std::to_string(conf.serial_number);
     } else {
       RCLCPP_WARN(node->get_logger(),
-                  "Camera %d not available, skipping camera info/logging",
+                  "Camera %ld not available, skipping camera info/logging",
                   i + 1);
       frame_name = "cam" + std::to_string(i + 1) + "_na"; // placeholder
     }
@@ -430,10 +446,21 @@ int main(int argc, char **argv) {
   human_bboxes.resize(clients.size());
   auto identity = Eigen::Matrix4d::Identity();
 
+  std::vector<cv::Mat> rgb_images;
+  rgb_images.resize(clients.size());
+
   SimpleTimer timer;
   // ------------------ Main loop ------------------
   while (rclcpp::ok()) {
     trigger.notifyZED();
+    // reset Masks
+    for (auto &mask : human_masks) {
+      mask = cv::Mat();
+    }
+    for (auto &bbox : human_bboxes) {
+      bbox = cv::Rect();
+    }
+
     RCLCPP_INFO(node->get_logger(), "----------------New frame---------------");
     // points, colors, normals
     std::vector<std::vector<
@@ -445,10 +472,17 @@ int main(int argc, char **argv) {
       for (int i = 0; i < cameras.size(); i++) {
         if (!camera_available[i])
           continue;
-        if (yoloe_detector)
-          clients[i].getYoloPredictionMask(*yoloe_detector, human_masks[i],
-                                           human_bboxes[i],
-                                           erode_body_mask_kernel_size);
+        if (yoloe_detector) {
+          auto status = clients[i].getYoloPredictionMask(
+              *yoloe_detector, rgb_images[i], human_masks[i], human_bboxes[i],
+              yolo_conf_threshold, yolo_iou_threshold,
+              erode_body_mask_kernel_size, yolo_rotation_angle);
+          if (!status) {
+            RCLCPP_WARN(node->get_logger(),
+                        "YOLO failed to get human mask for camera %d",
+                        cam_ids[i]);
+          }
+        }
       }
     }
 
@@ -518,11 +552,12 @@ int main(int argc, char **argv) {
                                                sl::MEASURE::NORMALS) ==
                 sl::ERROR_CODE::SUCCESS) {
               float *normal_ptr = normal_mat.getPtr<float>(sl::MEM::CPU);
-              publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i],
-                                normal_ptr);
+              publish_depth_msg(depth_pubs[i], depth_map, rgb_images[i],
+                                cam_frames[i], normal_ptr);
             } else {
               include_normals = false;
-              publish_depth_msg(depth_pubs[i], depth_map, cam_frames[i]);
+              publish_depth_msg(depth_pubs[i], depth_map, rgb_images[i],
+                                cam_frames[i]);
             }
           }
         }
@@ -533,30 +568,45 @@ int main(int argc, char **argv) {
       for (size_t i = 0; i < clients.size(); ++i) {
         if (!camera_available[i])
           continue;
-        sl::Mat zed_image;
-        if (clients[i].zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
-            sl::ERROR_CODE::SUCCESS) {
+        // sl::Mat zed_image;
+        // if (clients[i].zed.retrieveImage(zed_image, sl::VIEW::LEFT) ==
+        //     sl::ERROR_CODE::SUCCESS) {
 
-          cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
-                          zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+        // cv::Mat cvImage(zed_image.getHeight(), zed_image.getWidth(), CV_8UC4,
+        //                 zed_image.getPtr<sl::uchar1>(sl::MEM::CPU));
 
-          cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
+        // cv::cvtColor(cvImage, cvImage, cv::COLOR_BGRA2BGR);
 
-          cv::Mat displayed_image = cvImage;
-          if (overlay_yolo_mask && !human_masks[i].empty()) {
-            displayed_image = clients[i].overlayPersonMask(
-                cvImage, human_masks[i], human_bboxes[i]);
-          }
+        // cv::Mat displayed_image = cvImage;
+        cv::Mat displayed_image = rgb_images[i];
 
-          if (publish_image) {
-            // add timesteps
-            publish_image_msg(image_pubs[i], displayed_image, cam_frames[i]);
-          }
-          if (visualize_image) {
-            cv::imshow(std::string("Camera ") + std::to_string(cam_ids[i]),
-                       displayed_image);
-          }
+        // rgb_images[i] is only filled by getYoloPredictionMask (called when
+        // YOLO-dependent features are active). If none of those were enabled,
+        // fall back to a direct retrieval from the ZED camera.
+        // if (displayed_image.empty()) {
+        //   sl::Mat sl_image;
+        //   if (clients[i].zed.retrieveImage(sl_image, sl::VIEW::LEFT) ==
+        //       sl::ERROR_CODE::SUCCESS) {
+        //     cv::Mat bgra(sl_image.getHeight(), sl_image.getWidth(), CV_8UC4,
+        //                  sl_image.getPtr<sl::uchar1>(sl::MEM::CPU));
+        //     cv::cvtColor(bgra, displayed_image, cv::COLOR_BGRA2BGR);
+        //   }
+        // }
+
+        if (overlay_yolo_mask && !human_masks[i].empty()) {
+          displayed_image = clients[i].overlayPersonMask(
+              displayed_image, human_masks[i], human_bboxes[i]);
         }
+
+        // if (publish_image) {
+        //   // add timesteps
+        //   publish_image_msg(image_pubs[i], displayed_image, cam_frames[i]);
+        // }
+        if (visualize_image) {
+          cv::imshow(std::string("Camera ") + std::to_string(cam_ids[i]),
+                     displayed_image);
+        }
+        // }
       }
 
       if (visualize_image) {
